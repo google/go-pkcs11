@@ -28,7 +28,7 @@ func newTestModule(t *testing.T) *Module {
 	if err != nil {
 		t.Fatalf("opening syslog file: %v", err)
 	}
-	if _, err := f.Seek(io.SeekEnd, 0); err != nil {
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		f.Close()
 		t.Fatalf("seeking to end of file: %v", err)
 	}
@@ -104,5 +104,31 @@ func TestSlotIDs(t *testing.T) {
 	sort.Slice(want, func(i, j int) bool { return want[i] < want[j] })
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("SlotIDs() returned unexpected value, got %v, want %v", got, want)
+	}
+}
+
+func TestInfo(t *testing.T) {
+	m := newTestModule(t)
+	info := m.Info()
+
+	wantMan := "SoftHSM"
+	if info.Manufacturer != wantMan {
+		t.Errorf("SlotInfo() unexpected manufacturer, got %s, want %s", info.Manufacturer, wantMan)
+	}
+}
+
+func TestSlotInfo(t *testing.T) {
+	m := newTestModule(t)
+	if err := m.SlotInitialize(0, "test", "1234"); err != nil {
+		t.Fatalf("SlotInitialize(0, 'test', '1234'): %v", err)
+	}
+
+	info, err := m.SlotInfo(0)
+	if err != nil {
+		t.Fatalf("SlotInfo(0): %v", err)
+	}
+	wantLabel := "test"
+	if info.Label != wantLabel {
+		t.Errorf("SlotInfo() unexpected label, got %s, want %s", info.Label, wantLabel)
 	}
 }

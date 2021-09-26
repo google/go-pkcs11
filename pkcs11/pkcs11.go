@@ -1,3 +1,4 @@
+// Package pkcs11 implements logic for using PKCS #11 shared libraries.
 package pkcs11
 
 /*
@@ -53,11 +54,35 @@ CK_RV ck_get_slot_list(
 ) {
 	return (*fl->C_GetSlotList)(CK_FALSE, pSlotList, pulCount);
 }
+
+CK_RV ck_get_info(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_INFO_PTR pInfo
+) {
+	return (*fl->C_GetInfo)(pInfo);
+}
+
+CK_RV ck_get_slot_info(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SLOT_ID slotID,
+	CK_SLOT_INFO_PTR pInfo
+) {
+	return (*fl->C_GetSlotInfo)(slotID, pInfo);
+}
+
+CK_RV ck_get_token_info(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SLOT_ID slotID,
+	CK_TOKEN_INFO_PTR pInfo
+) {
+	return (*fl->C_GetTokenInfo)(slotID, pInfo);
+}
 */
 // #cgo linux LDFLAGS: -ldl
 import "C"
 import (
 	"fmt"
+	"strings"
 	"unsafe"
 )
 
@@ -82,8 +107,15 @@ func isOk(fnName string, rv C.CK_RV) error {
 // requests locking support from the module, but concurrent safety may
 // depend on the underlying library.
 type Module struct {
+	// mod is a pointer to the dlopen handle. Kept around to dlfree
+	// when the Module is closed.
 	mod unsafe.Pointer
-	fl  C.CK_FUNCTION_LIST_PTR
+	// List of C functions provided by the module.
+	fl C.CK_FUNCTION_LIST_PTR
+	// Version of the module, used for compatibility.
+	version C.CK_VERSION
+
+	info Info
 }
 
 // Open dlopens a shared library by path, initializing the module.
@@ -121,9 +153,23 @@ func Open(path string) (*Module, error) {
 		return nil, err
 	}
 
+	var info C.CK_INFO
+	if err := isOk("C_GetInfo", C.ck_get_info(p, &info)); err != nil {
+		C.dlclose(mod)
+		return nil, err
+	}
+
 	return &Module{
-		mod: mod,
-		fl:  p,
+		mod:     mod,
+		fl:      p,
+		version: info.cryptokiVersion,
+		info: Info{
+			Manufacturer: toString(info.manufacturerID[:]),
+			Version: Version{
+				Major: uint8(info.libraryVersion.major),
+				Minor: uint8(info.libraryVersion.minor),
+			},
+		},
 	}, nil
 }
 
@@ -165,17 +211,17 @@ func ckString(s string) []C.CK_UTF8CHAR {
 //
 // Different modules have different restrictions on the PIN value, and some
 // may refuse an empty PIN.
-func (m *Module) SlotInitialize(slotID uint32, label, pin string) error {
+func (m *Module) SlotInitialize(slotID uint32, label, adminPIN string) error {
 	var cLabel [32]C.CK_UTF8CHAR
 	if !ckStringPadded(cLabel[:], label) {
 		return fmt.Errorf("pkcs11: label too long")
 	}
 
-	cPIN := ckString(pin)
+	cPIN := ckString(adminPIN)
 	cPINLen := C.CK_ULONG(len(cPIN))
 
 	var cPINPtr C.CK_UTF8CHAR_PTR
-	if len(pin) > 0 {
+	if len(adminPIN) > 0 {
 		cPINPtr = &cPIN[0]
 	}
 
@@ -217,4 +263,79 @@ func (m *Module) SlotIDs() ([]uint32, error) {
 		ids[i] = uint32(id)
 	}
 	return ids, nil
+}
+
+// Version holds a major and minor version.
+type Version struct {
+	Major uint8
+	Minor uint8
+}
+
+// Info holds global information about the module.
+type Info struct {
+	// Manufacturer of the implementation. When multiple PKCS #11 devices are
+	// present this is used to differentiate devices.
+	Manufacturer string
+	// Version of the module.
+	Version Version
+	// Human readable description of the module.
+	Description string
+}
+
+// SlotInfo holds information about the slot and underlying token.
+type SlotInfo struct {
+	Label  string
+	Model  string
+	Serial string
+
+	Description string
+}
+
+func toString(b []C.uchar) string {
+	lastIndex := len(b)
+	for i := len(b); i > 0; i-- {
+		if b[i-1] != C.uchar(' ') {
+			break
+		}
+		lastIndex = i - 1
+	}
+
+	var sb strings.Builder
+	for _, c := range b[:lastIndex] {
+		sb.WriteByte(byte(c))
+	}
+	return sb.String()
+}
+
+// Info returns additional information about the module.
+func (m *Module) Info() Info {
+	return m.info
+}
+
+// SlotInfo queries for information about the slot, such as the label.
+func (m *Module) SlotInfo(id uint32) (*SlotInfo, error) {
+	var (
+		cSlotInfo  C.CK_SLOT_INFO
+		cTokenInfo C.CK_TOKEN_INFO
+		slotID     = C.CK_SLOT_ID(id)
+	)
+	rv := C.ck_get_slot_info(m.fl, slotID, &cSlotInfo)
+	if err := isOk("C_GetSlotInfo", rv); err != nil {
+		return nil, err
+	}
+	info := SlotInfo{
+		Description: toString(cSlotInfo.slotDescription[:]),
+	}
+	if (cSlotInfo.flags & C.CKF_TOKEN_PRESENT) == 0 {
+		return &info, nil
+	}
+
+	rv = C.ck_get_token_info(m.fl, slotID, &cTokenInfo)
+	if err := isOk("C_GetTokenInfo", rv); err != nil {
+		return nil, err
+	}
+	info.Label = toString(cTokenInfo.label[:])
+	info.Model = toString(cTokenInfo.model[:])
+	info.Serial = toString(cTokenInfo.serialNumber[:])
+	return &info, nil
 }
