@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -88,5 +90,19 @@ func TestSlotInit(t *testing.T) {
 	m := newTestModule(t)
 	if err := m.SlotInitialize(0, "test", "1234"); err != nil {
 		t.Fatalf("SlotInitialize(0, 'test', '1234'): %v", err)
+	}
+}
+
+func TestSlotIDs(t *testing.T) {
+	m := newTestModule(t)
+	got, err := m.SlotIDs()
+	if err != nil {
+		t.Fatalf("SlotIDs(): %v", err)
+	}
+	want := []uint32{0}
+	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+	sort.Slice(want, func(i, j int) bool { return want[i] < want[j] })
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("SlotIDs() returned unexpected value, got %v, want %v", got, want)
 	}
 }

@@ -45,6 +45,14 @@ CK_RV ck_init_token(
 	}
 	return (*fl->C_InitToken)(slotID, pPin, ulPinLen, pLabel);
 }
+
+CK_RV ck_get_slot_list(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SLOT_ID_PTR pSlotList,
+	CK_ULONG_PTR pulCount
+) {
+	return (*fl->C_GetSlotList)(CK_FALSE, pSlotList, pulCount);
+}
 */
 // #cgo linux LDFLAGS: -ldl
 import "C"
@@ -183,4 +191,30 @@ func (m *Module) SlotInitialize(slotID uint32, label, pin string) error {
 	}
 
 	return nil
+}
+
+// SlotIDs returns the IDs of all slots associated with this module, including
+// ones that haven't been initalized.
+func (m *Module) SlotIDs() ([]uint32, error) {
+	var n C.CK_ULONG
+	rv := C.ck_get_slot_list(m.fl, nil, &n)
+	if err := isOk("C_GetSlotList", rv); err != nil {
+		return nil, err
+	}
+
+	l := make([]C.CK_SLOT_ID, int(n))
+	rv = C.ck_get_slot_list(m.fl, &l[0], &n)
+	if err := isOk("C_GetSlotList", rv); err != nil {
+		return nil, err
+	}
+	if int(n) > len(l) {
+		return nil, fmt.Errorf("pkcs11: C_GetSlotList returned too many elements, got %d, want %d", int(n), len(l))
+	}
+	l = l[:int(n)]
+
+	ids := make([]uint32, len(l))
+	for i, id := range l {
+		ids[i] = uint32(id)
+	}
+	return ids, nil
 }
