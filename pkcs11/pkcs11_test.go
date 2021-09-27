@@ -158,3 +158,47 @@ func TestSlot(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateECDSA(t *testing.T) {
+	tests := []struct {
+		name  string
+		curve ECDSACurve
+	}{
+		{"P256", P256},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := newTestModule(t)
+			if err := m.SlotInitialize(0, "test", "1234"); err != nil {
+				t.Fatalf("SlotInitialize(0, 'test', '1234'): %v", err)
+			}
+
+			s, err := m.Slot(0, SlotReadWrite())
+			if err != nil {
+				t.Fatalf("Slot(0): %v", err)
+			}
+			defer s.Close()
+			if err := s.LoginAdmin("1234"); err != nil {
+				t.Fatalf("authenicating as admin: %v", err)
+			}
+
+			if err := s.InitPIN("12345"); err != nil {
+				t.Fatalf("initializing user pin: %v", err)
+			}
+
+			if err := s.Logout(); err != nil {
+				t.Fatalf("logout: %v", err)
+			}
+
+			if err := s.Login("12345"); err != nil {
+				t.Fatalf("authenicating as admin: %v", err)
+			}
+
+			o := GenerateECDSA{Curve: test.curve}
+			if _, err := s.Generate(o); err != nil {
+				t.Fatalf("Generate(%#v) failed: %v", o, err)
+			}
+		})
+	}
+}

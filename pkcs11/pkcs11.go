@@ -93,10 +93,61 @@ CK_RV ck_close_session(
 ) {
 	return (*fl->C_CloseSession)(hSession);
 }
+
+CK_RV ck_login(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_USER_TYPE userType,
+	CK_UTF8CHAR_PTR pPin,
+	CK_ULONG ulPinLen
+) {
+	return (*fl->C_Login)(hSession, userType, pPin, ulPinLen);
+}
+
+CK_RV ck_logout(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession
+) {
+	return (*fl->C_Logout)(hSession);
+}
+
+CK_RV ck_init_pin(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_UTF8CHAR_PTR pPin,
+	CK_ULONG ulPinLen
+) {
+	return (*fl->C_InitPIN)(hSession, pPin, ulPinLen);
+}
+
+CK_RV ck_generate_key_pair(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_MECHANISM_PTR pMechanism,
+	CK_ATTRIBUTE_PTR pPublicKeyTemplate,
+	CK_ULONG ulPublicKeyAttributeCount,
+	CK_ATTRIBUTE_PTR pPrivateKeyTemplate,
+	CK_ULONG ulPrivateKeyAttributeCount,
+	CK_OBJECT_HANDLE_PTR phPublicKey,
+	CK_OBJECT_HANDLE_PTR phPrivateKey
+) {
+	return (*fl->C_GenerateKeyPair)(
+		hSession,
+		pMechanism,
+		pPublicKeyTemplate,
+		ulPublicKeyAttributeCount,
+		pPrivateKeyTemplate,
+		ulPrivateKeyAttributeCount,
+		phPublicKey,
+		phPrivateKey
+	);
+}
 */
 // #cgo linux LDFLAGS: -ldl
 import "C"
 import (
+	"crypto"
+	"encoding/asn1"
 	"fmt"
 	"strings"
 	"unsafe"
@@ -417,4 +468,147 @@ func (m *Module) Slot(id uint32, opts ...SlotOption) (*Slot, error) {
 // Close releases the slot session.
 func (s *Slot) Close() error {
 	return isOk("C_CloseSession", C.ck_close_session(s.fl, s.h))
+}
+
+// TODO(ericchiang): merge with SlotInitialize.
+func (s *Slot) InitPIN(pin string) error {
+	if pin == "" {
+		return fmt.Errorf("invalid pin")
+	}
+	cPIN := ckString(pin)
+	cPINLen := C.CK_ULONG(len(cPIN))
+	return isOk("C_InitPIN", C.ck_init_pin(s.fl, s.h, &cPIN[0], cPINLen))
+}
+
+func (s *Slot) Logout() error {
+	return isOk("C_Logout", C.ck_logout(s.fl, s.h))
+}
+
+func (s *Slot) Login(pin string) error {
+	// TODO(ericchiang): check for CKR_USER_ALREADY_LOGGED_IN and auto logout.
+	if pin == "" {
+		return fmt.Errorf("invalid pin")
+	}
+	cPIN := ckString(pin)
+	cPINLen := C.CK_ULONG(len(cPIN))
+	return isOk("C_Login", C.ck_login(s.fl, s.h, C.CKU_USER, &cPIN[0], cPINLen))
+}
+
+func (s *Slot) LoginAdmin(adminPIN string) error {
+	// TODO(ericchiang): maybe run commands, detect CKR_USER_NOT_LOGGED_IN, then
+	// automatically login?
+	if adminPIN == "" {
+		return fmt.Errorf("invalid admin pin")
+	}
+	cPIN := ckString(adminPIN)
+	cPINLen := C.CK_ULONG(len(cPIN))
+	return isOk("C_Login", C.ck_login(s.fl, s.h, C.CKU_SO, &cPIN[0], cPINLen))
+}
+
+type GenerateOption interface {
+	isGenerateOption()
+}
+
+// GenerateCDSA is a generation option that creates an ECDSA private key on the
+// slot.
+type GenerateECDSA struct {
+	Curve ECDSACurve
+}
+
+func (g GenerateECDSA) isGenerateOption() {}
+
+type ECDSACurve int
+
+const (
+	P256 ECDSACurve = iota + 1
+	P384
+	P521
+)
+
+// https://datatracker.ietf.org/doc/html/rfc5480#section-2.1.1.1
+
+// Generate a private key on the slot, creating associated private and public
+// key objects.
+//
+// Generate accepts GenerateECDSA or GenerateRSA.
+//
+//		o := pkcs11.GenerateECDSA{
+//			Curve: pkcs11.PS256,
+//		}
+//		priv, err := m.Generate(o)
+//
+func (s *Slot) Generate(opts GenerateOption) (crypto.PrivateKey, error) {
+	switch o := opts.(type) {
+	case GenerateECDSA:
+		return s.generateECDSA(o)
+	default:
+		return nil, fmt.Errorf("unreachable")
+	}
+}
+
+// generateECDSA implements the CKM_ECDSA_KEY_PAIR_GEN mechanism.
+//
+// http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959719
+// https://datatracker.ietf.org/doc/html/rfc5480#section-2.1.1.1
+// http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/os/pkcs11-curr-v2.40-os.html#_Toc416960014
+func (s *Slot) generateECDSA(o GenerateECDSA) (crypto.PrivateKey, error) {
+	var (
+		mechanism = C.CK_MECHANISM{
+			mechanism: C.CKM_EC_KEY_PAIR_GEN,
+		}
+		pubH  C.CK_OBJECT_HANDLE
+		privH C.CK_OBJECT_HANDLE
+	)
+
+	// https://datatracker.ietf.org/doc/html/rfc5480#section-2.1.1.1
+	var oid asn1.ObjectIdentifier
+	switch o.Curve {
+	case P256:
+		oid = asn1.ObjectIdentifier{1, 2, 840, 10045, 3, 1, 7}
+	case P384:
+		oid = asn1.ObjectIdentifier{1, 3, 132, 0, 34}
+	case P521:
+		oid = asn1.ObjectIdentifier{1, 3, 132, 0, 35}
+	default:
+		return nil, fmt.Errorf("unsupported ECDSA curve")
+	}
+
+	oidASN1, err := asn1.Marshal(oid)
+	if err != nil {
+		return nil, fmt.Errorf("marshal algorithm identifier: %v", err)
+	}
+
+	// When passing a struct or array to C, that value can't refer to Go
+	// memory. Allocate all attribute values in C rather than in Go.
+	cOID := (C.CK_VOID_PTR)(C.CBytes(oidASN1))
+	defer C.free(unsafe.Pointer(cOID))
+
+	cTrue := (C.CK_VOID_PTR)(C.malloc(C.sizeof_CK_BBOOL))
+	cFalse := (C.CK_VOID_PTR)(C.malloc(C.sizeof_CK_BBOOL))
+	defer C.free(unsafe.Pointer(cTrue))
+	defer C.free(unsafe.Pointer(cFalse))
+	*((*C.CK_BBOOL)(cTrue)) = C.CK_TRUE
+	*((*C.CK_BBOOL)(cFalse)) = C.CK_FALSE
+
+	privTmpl := []C.CK_ATTRIBUTE{
+		{C.CKA_PRIVATE, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
+		{C.CKA_SENSITIVE, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
+		{C.CKA_SIGN, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
+	}
+
+	pubTmpl := []C.CK_ATTRIBUTE{
+		{C.CKA_EC_PARAMS, cOID, C.CK_ULONG(len(oidASN1))},
+		{C.CKA_VERIFY, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
+	}
+	rv := C.ck_generate_key_pair(
+		s.fl, s.h, &mechanism,
+		&pubTmpl[0], C.CK_ULONG(len(pubTmpl)),
+		&privTmpl[0], C.CK_ULONG(len(privTmpl)),
+		&pubH, &privH,
+	)
+
+	if err := isOk("C_GenerateKeyPair", rv); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
