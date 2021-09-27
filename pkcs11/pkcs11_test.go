@@ -132,3 +132,29 @@ func TestSlotInfo(t *testing.T) {
 		t.Errorf("SlotInfo() unexpected label, got %s, want %s", info.Label, wantLabel)
 	}
 }
+
+func TestSlot(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []SlotOption
+	}{
+		{"Default", []SlotOption{}},
+		{"RWSession", []SlotOption{SlotReadWrite()}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := newTestModule(t)
+			if err := m.SlotInitialize(0, "test", "1234"); err != nil {
+				t.Fatalf("SlotInitialize(0, 'test', '1234'): %v", err)
+			}
+
+			s, err := m.Slot(0, test.opts...)
+			if err != nil {
+				t.Fatalf("Slot(0): %v", err)
+			}
+			if err := s.Close(); err != nil {
+				t.Fatalf("Close(): %v", err)
+			}
+		})
+	}
+}

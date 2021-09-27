@@ -77,6 +77,22 @@ CK_RV ck_get_token_info(
 ) {
 	return (*fl->C_GetTokenInfo)(slotID, pInfo);
 }
+
+CK_RV ck_open_session(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SLOT_ID slotID,
+	CK_FLAGS flags,
+	CK_SESSION_HANDLE_PTR phSession
+) {
+	return (*fl->C_OpenSession)(slotID, flags, NULL_PTR, NULL_PTR, phSession);
+}
+
+CK_RV ck_close_session(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession
+) {
+	return (*fl->C_CloseSession)(hSession);
+}
 */
 // #cgo linux LDFLAGS: -ldl
 import "C"
@@ -338,4 +354,67 @@ func (m *Module) SlotInfo(id uint32) (*SlotInfo, error) {
 	info.Model = toString(cTokenInfo.model[:])
 	info.Serial = toString(cTokenInfo.serialNumber[:])
 	return &info, nil
+}
+
+// Slot represents a session to a slot.
+//
+// A slot holds a listable set of objects, such as certificates and
+// cryptographic keys.
+type Slot struct {
+	fl C.CK_FUNCTION_LIST_PTR
+	h  C.CK_SESSION_HANDLE
+}
+
+// SlotOption is a configuration option for the slot session.
+type SlotOption interface {
+	isSlotOption()
+}
+
+type slotOptionFlag C.CK_FLAGS
+
+func (f slotOptionFlag) isSlotOption() {}
+
+// SlotReadWrite indicates that the slot should be opened with write capabilities,
+// such as generating keys or importing certificates.
+//
+// By default, sessions can access objects and perform signing requests.
+func SlotReadWrite() SlotOption {
+	return slotOptionFlag(C.CKF_RW_SESSION)
+}
+
+// Slot creates a session with the given slot, by default read-only. Users
+// must call Close to release the session.
+//
+// SlotOption values can be provided to change the behavior of the slot
+// session.
+//
+// The returned Slot's behavior is undefined once the Module is closed.
+func (m *Module) Slot(id uint32, opts ...SlotOption) (*Slot, error) {
+	var (
+		h      C.CK_SESSION_HANDLE
+		slotID = C.CK_SLOT_ID(id)
+		// "For legacy reasons, the CKF_SERIAL_SESSION bit MUST always be set".
+		//
+		// http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959742
+		flags C.CK_FLAGS = C.CKF_SERIAL_SESSION
+	)
+
+	for _, o := range opts {
+		switch o := o.(type) {
+		case slotOptionFlag:
+			flags = flags | C.CK_FLAGS(o)
+		}
+	}
+
+	rv := C.ck_open_session(m.fl, slotID, flags, &h)
+	if err := isOk("C_OpenSession", rv); err != nil {
+		return nil, err
+	}
+
+	return &Slot{fl: m.fl, h: h}, nil
+}
+
+// Close releases the slot session.
+func (s *Slot) Close() error {
+	return isOk("C_CloseSession", C.ck_close_session(s.fl, s.h))
 }
