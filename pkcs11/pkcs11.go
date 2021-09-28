@@ -142,6 +142,42 @@ CK_RV ck_generate_key_pair(
 		phPrivateKey
 	);
 }
+
+CK_RV ck_find_objects_init(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_ATTRIBUTE_PTR pTemplate,
+	CK_ULONG ulCount
+) {
+	return (*fl->C_FindObjectsInit)(hSession, pTemplate, ulCount);
+}
+
+CK_RV ck_find_objects(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_OBJECT_HANDLE_PTR phObject,
+	CK_ULONG ulMaxObjectCount,
+	CK_ULONG_PTR pulObjectCount
+) {
+	return (*fl->C_FindObjects)(hSession, phObject, ulMaxObjectCount, pulObjectCount);
+}
+
+CK_RV ck_find_objects_final(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession
+) {
+	return (*fl->C_FindObjectsFinal)(hSession);
+}
+
+CK_RV ck_get_attribute_value(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_OBJECT_HANDLE hObject,
+	CK_ATTRIBUTE_PTR pTemplate,
+	CK_ULONG ulCount
+) {
+	return (*fl->C_GetAttributeValue)(hSession, hObject, pTemplate, ulCount);
+}
 */
 // #cgo linux LDFLAGS: -ldl
 import "C"
@@ -152,6 +188,44 @@ import (
 	"strings"
 	"unsafe"
 )
+
+// ckStringPadded copies a string into b, padded with ' '. If the string is larger
+// than the provided buffer, this function returns false.
+func ckStringPadded(b []C.CK_UTF8CHAR, s string) bool {
+	if len(s) > len(b) {
+		return false
+	}
+	for i := range b {
+		if i < len(s) {
+			b[i] = C.CK_UTF8CHAR(s[i])
+		} else {
+			b[i] = C.CK_UTF8CHAR(' ')
+		}
+	}
+	return true
+}
+
+// ckString converts a Go string to a cryptokit string. The string is still held
+// by Go memory and doesn't need to be freed.
+func ckString(s string) []C.CK_UTF8CHAR {
+	b := make([]C.CK_UTF8CHAR, len(s))
+	for i, c := range []byte(s) {
+		b[i] = C.CK_UTF8CHAR(c)
+	}
+	return b
+}
+
+// ckCString converts a Go string to a cryptokit string held by C. This is required,
+// for example, when building a CK_ATTRIBUTE, which needs to hold a pointer to a
+// cryptokit string.
+func ckCString(s string) *C.CK_UTF8CHAR {
+	b := (*C.CK_UTF8CHAR)(C.malloc(C.sizeof_CK_UTF8CHAR * C.ulong(len(s))))
+	bs := unsafe.Slice(b, len(s))
+	for i, c := range []byte(s) {
+		bs[i] = C.CK_UTF8CHAR(c)
+	}
+	return b
+}
 
 // Error is returned for cryptokit specific API codes.
 type Error struct {
@@ -250,28 +324,6 @@ func (m *Module) Close() error {
 		return fmt.Errorf("pkcs11: dlclose error: %s", C.GoString(C.dlerror()))
 	}
 	return nil
-}
-
-func ckStringPadded(b []C.CK_UTF8CHAR, s string) bool {
-	if len(s) > len(b) {
-		return false
-	}
-	for i := range b {
-		if i < len(s) {
-			b[i] = C.CK_UTF8CHAR(s[i])
-		} else {
-			b[i] = C.CK_UTF8CHAR(' ')
-		}
-	}
-	return true
-}
-
-func ckString(s string) []C.CK_UTF8CHAR {
-	b := make([]C.CK_UTF8CHAR, len(s))
-	for i, c := range []byte(s) {
-		b[i] = C.CK_UTF8CHAR(c)
-	}
-	return b
 }
 
 // SlotInitialize configures a slot object. Internally this calls C_InitToken.
@@ -503,6 +555,170 @@ func (s *Slot) LoginAdmin(adminPIN string) error {
 	cPIN := ckString(adminPIN)
 	cPINLen := C.CK_ULONG(len(cPIN))
 	return isOk("C_Login", C.ck_login(s.fl, s.h, C.CKU_SO, &cPIN[0], cPINLen))
+}
+
+type Class int
+
+const (
+	Data Class = iota + 1
+	Certificate
+	PrivateKey
+	PublicKey
+	SecretKey
+	DomainParameters
+	UnknownClass
+)
+
+func (c Class) ckType() (C.CK_OBJECT_CLASS, bool) {
+	switch c {
+	case Data:
+		return C.CKO_DATA, true
+	case Certificate:
+		return C.CKO_CERTIFICATE, true
+	case PublicKey:
+		return C.CKO_PUBLIC_KEY, true
+	case PrivateKey:
+		return C.CKO_PRIVATE_KEY, true
+	case SecretKey:
+		return C.CKO_SECRET_KEY, true
+	case DomainParameters:
+		return C.CKO_DOMAIN_PARAMETERS, true
+	}
+	return 0, false
+}
+
+func (s *Slot) newObject(o C.CK_OBJECT_HANDLE) (Object, error) {
+	objClass := C.CK_OBJECT_CLASS_PTR(C.malloc(C.sizeof_CK_OBJECT_CLASS))
+	defer C.free(unsafe.Pointer(objClass))
+
+	a := []C.CK_ATTRIBUTE{
+		{C.CKA_CLASS, C.CK_VOID_PTR(objClass), C.CK_ULONG(C.sizeof_CK_OBJECT_CLASS)},
+	}
+	rv := C.ck_get_attribute_value(s.fl, s.h, o, &a[0], C.CK_ULONG(len(a)))
+	if err := isOk("C_GetAttributeValue", rv); err != nil {
+		return Object{}, err
+	}
+	return Object{s.fl, s.h, o, *objClass}, nil
+}
+
+func ObjectLabel(label string) ObjectOption {
+	return objectLabel(label)
+}
+
+func ObjectClass(class Class) ObjectOption {
+	return objectClass(class)
+}
+
+type objectClass Class
+type objectLabel string
+
+func (o objectClass) isObjectOption() {}
+func (o objectLabel) isObjectOption() {}
+
+type ObjectOption interface {
+	isObjectOption()
+}
+
+// Objects searches a slot for objects that match the given options, or all
+// objects if no options are provided.
+//
+// The returned objects behavior is undefined once the Slot object is closed.
+func (s *Slot) Objects(opts ...ObjectOption) ([]Object, error) {
+	var attrs []C.CK_ATTRIBUTE
+	for _, o := range opts {
+		switch o := o.(type) {
+		case objectLabel:
+			l := string(o)
+			cs := ckCString(l)
+			defer C.free(unsafe.Pointer(cs))
+
+			attrs = append(attrs, C.CK_ATTRIBUTE{
+				C.CKA_LABEL,
+				C.CK_VOID_PTR(cs),
+				C.CK_ULONG(len(l)),
+			})
+		case objectClass:
+			c, ok := Class(o).ckType()
+			if !ok {
+				continue
+			}
+			objClass := C.CK_OBJECT_CLASS_PTR(C.malloc(C.sizeof_CK_OBJECT_CLASS))
+			defer C.free(unsafe.Pointer(objClass))
+
+			*objClass = c
+			attrs = append(attrs, C.CK_ATTRIBUTE{
+				C.CKA_CLASS,
+				C.CK_VOID_PTR(objClass),
+				C.CK_ULONG(C.sizeof_CK_OBJECT_CLASS),
+			})
+		default:
+			return nil, fmt.Errorf("unrecongized object option: %T", o)
+		}
+	}
+
+	var rv C.CK_RV
+	if len(attrs) > 0 {
+		rv = C.ck_find_objects_init(s.fl, s.h, &attrs[0], C.CK_ULONG(len(attrs)))
+	} else {
+		rv = C.ck_find_objects_init(s.fl, s.h, nil, 0)
+	}
+	if err := isOk("C_FindObjectsInit", rv); err != nil {
+		return nil, err
+	}
+
+	var handles []C.CK_OBJECT_HANDLE
+	const objectsAtATime = 16
+	for {
+		cObjHandles := make([]C.CK_OBJECT_HANDLE, objectsAtATime)
+		cObjMax := C.CK_ULONG(objectsAtATime)
+		var n C.CK_ULONG
+
+		rv := C.ck_find_objects(s.fl, s.h, &cObjHandles[0], cObjMax, &n)
+		if err := isOk("C_FindObjects", rv); err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			break
+		}
+
+		handles = append(handles, cObjHandles[:int(n)]...)
+	}
+
+	var objs []Object
+	for _, h := range handles {
+		o, err := s.newObject(h)
+		if err != nil {
+			return nil, err
+		}
+		objs = append(objs, o)
+	}
+	return objs, nil
+}
+
+type Object struct {
+	fl C.CK_FUNCTION_LIST_PTR
+	h  C.CK_SESSION_HANDLE
+	o  C.CK_OBJECT_HANDLE
+	c  C.CK_OBJECT_CLASS
+}
+
+func (o Object) Class() Class {
+	switch o.c {
+	case C.CKO_DATA:
+		return Data
+	case C.CKO_CERTIFICATE:
+		return Certificate
+	case C.CKO_PUBLIC_KEY:
+		return PublicKey
+	case C.CKO_PRIVATE_KEY:
+		return PrivateKey
+	case C.CKO_SECRET_KEY:
+		return SecretKey
+	case C.CKO_DOMAIN_PARAMETERS:
+		return DomainParameters
+	default:
+		return UnknownClass
+	}
 }
 
 type GenerateOption interface {

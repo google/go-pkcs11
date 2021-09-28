@@ -204,3 +204,65 @@ func TestGenerateECDSA(t *testing.T) {
 		})
 	}
 }
+
+func TestObjects(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []ObjectOption
+		want []Class
+	}{
+		{"AllObjects", []ObjectOption{}, []Class{PublicKey, PrivateKey}},
+		{"PrivateKey", []ObjectOption{ObjectClass(PrivateKey)}, []Class{PrivateKey}},
+		{"PublicKey", []ObjectOption{ObjectClass(PublicKey)}, []Class{PublicKey}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := newTestModule(t)
+			if err := m.SlotInitialize(0, "test", "1234"); err != nil {
+				t.Fatalf("SlotInitialize(0, 'test', '1234'): %v", err)
+			}
+
+			s, err := m.Slot(0, SlotReadWrite())
+			if err != nil {
+				t.Fatalf("Slot(0): %v", err)
+			}
+			defer s.Close()
+			if err := s.LoginAdmin("1234"); err != nil {
+				t.Fatalf("authenicating as admin: %v", err)
+			}
+
+			if err := s.InitPIN("12345"); err != nil {
+				t.Fatalf("initializing user pin: %v", err)
+			}
+
+			if err := s.Logout(); err != nil {
+				t.Fatalf("logout: %v", err)
+			}
+
+			if err := s.Login("12345"); err != nil {
+				t.Fatalf("authenicating as admin: %v", err)
+			}
+
+			o := GenerateECDSA{Curve: P256}
+			if _, err := s.Generate(o); err != nil {
+				t.Fatalf("Generate(%#v) failed: %v", o, err)
+			}
+
+			objs, err := s.Objects(test.opts...)
+			if err != nil {
+				t.Fatalf("Slot(0).Objects(): %v", err)
+			}
+
+			var got []Class
+			for _, o := range objs {
+				got = append(got, o.Class())
+			}
+			sort.Slice(test.want, func(i, j int) bool { return test.want[i] < test.want[j] })
+			sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+
+			if !reflect.DeepEqual(test.want, got) {
+				t.Fatalf("Objects() classes mismatch, got %v, want %v", got, test.want)
+			}
+		})
+	}
+}
