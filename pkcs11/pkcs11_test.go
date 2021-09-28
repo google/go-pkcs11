@@ -165,6 +165,8 @@ func TestGenerateECDSA(t *testing.T) {
 		curve ECDSACurve
 	}{
 		{"P256", P256},
+		{"P384", P384},
+		{"P521", P521},
 	}
 
 	for _, test := range tests {
