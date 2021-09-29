@@ -16,6 +16,7 @@ package pkcs11
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/x509"
 	"encoding/pem"
@@ -238,6 +239,43 @@ func TestGenerateECDSA(t *testing.T) {
 			o := GenerateOptions{ECDSACurve: test.curve}
 			if _, err := s.Generate(o); err != nil {
 				t.Fatalf("Generate(%#v) failed: %v", o, err)
+			}
+		})
+	}
+}
+
+func TestECDSAPublicKey(t *testing.T) {
+	tests := []struct {
+		name  string
+		curve elliptic.Curve
+	}{
+		{"P256", elliptic.P256()},
+		{"P384", elliptic.P384()},
+		{"P521", elliptic.P521()},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := newTestSlot(t)
+
+			o := GenerateOptions{ECDSACurve: test.curve}
+			if _, err := s.Generate(o); err != nil {
+				t.Fatalf("Generate(%#v) failed: %v", o, err)
+			}
+			objs, err := s.Objects(ObjectOptions{Class: ClassPublicKey})
+			if err != nil {
+				t.Fatalf("Objects(): %v", err)
+			}
+			if len(objs) != 1 {
+				t.Fatalf("Objects() returned an unexpected number of objects, got %d, want 1", len(objs))
+			}
+			obj := objs[0]
+			pub, err := obj.PublicKey()
+			if err != nil {
+				t.Fatalf("PublicKey(): %v", err)
+			}
+			if _, ok := pub.(*ecdsa.PublicKey); !ok {
+				t.Errorf("PublicKey() unexpected type, got %T, want *ecdsa.PublicKey", pub)
 			}
 		})
 	}

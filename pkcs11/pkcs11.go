@@ -216,7 +216,9 @@ CK_RV ck_set_attribute_value(
 // #cgo linux LDFLAGS: -ldl
 import "C"
 import (
+	"bytes"
 	"crypto"
+	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/x509"
 	"encoding/asn1"
@@ -915,6 +917,85 @@ func (o Object) Certificate() (*Certificate, error) {
 	return &Certificate{o, *ct}, nil
 }
 
+func (o Object) PublicKey() (crypto.PublicKey, error) {
+	if o.Class() != ClassPublicKey {
+		return nil, fmt.Errorf("object has class: %s", o.Class())
+	}
+
+	kt := (*C.CK_KEY_TYPE)(C.malloc(C.sizeof_CK_KEY_TYPE))
+	defer C.free(unsafe.Pointer(kt))
+
+	attrs := []C.CK_ATTRIBUTE{
+		{C.CKA_KEY_TYPE, C.CK_VOID_PTR(kt), C.CK_ULONG(C.sizeof_CK_KEY_TYPE)},
+	}
+	if err := o.getAttribute(attrs); err != nil {
+		return nil, fmt.Errorf("getting certificate type: %w", err)
+	}
+	switch *kt {
+	case C.CKK_EC:
+		return o.ecdsaPublicKey()
+	default:
+		return nil, fmt.Errorf("unsupported key type: 0x%x", *kt)
+	}
+}
+
+func (o Object) ecdsaPublicKey() (crypto.PublicKey, error) {
+	// http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/cs01/pkcs11-curr-v2.40-cs01.html#_Toc399398881
+	attrs := []C.CK_ATTRIBUTE{
+		{C.CKA_EC_PARAMS, nil, 0},
+		{C.CKA_EC_POINT, nil, 0},
+	}
+	if err := o.getAttribute(attrs); err != nil {
+		return nil, fmt.Errorf("getting attributes: %w", err)
+	}
+	if attrs[0].ulValueLen == 0 {
+		return nil, fmt.Errorf("no ec paramaters available")
+	}
+	if attrs[1].ulValueLen == 0 {
+		return nil, fmt.Errorf("no ec point available")
+	}
+
+	cParam := (C.CK_VOID_PTR)(C.malloc(attrs[0].ulValueLen))
+	defer C.free(unsafe.Pointer(cParam))
+	attrs[0].pValue = cParam
+
+	cPoint := (C.CK_VOID_PTR)(C.malloc(attrs[1].ulValueLen))
+	defer C.free(unsafe.Pointer(cPoint))
+	attrs[1].pValue = cPoint
+
+	if err := o.getAttribute(attrs); err != nil {
+		return nil, fmt.Errorf("getting attribute values: %w", err)
+	}
+
+	paramBytes := C.GoBytes(unsafe.Pointer(cParam), C.int(attrs[0].ulValueLen))
+	pointBytes := C.GoBytes(unsafe.Pointer(cPoint), C.int(attrs[1].ulValueLen))
+
+	var curve elliptic.Curve
+	if bytes.Equal(paramBytes, p256OIDRaw) {
+		curve = elliptic.P256()
+	} else if bytes.Equal(paramBytes, p384OIDRaw) {
+		curve = elliptic.P384()
+	} else if bytes.Equal(paramBytes, p521OIDRaw) {
+		curve = elliptic.P521()
+	} else {
+		return nil, fmt.Errorf("unsupported curve")
+	}
+
+	var rawPoint asn1.RawValue
+	if _, err := asn1.Unmarshal(pointBytes, &rawPoint); err != nil {
+		return nil, fmt.Errorf("decoding ec point: %v", err)
+	}
+	x, y := elliptic.Unmarshal(curve, rawPoint.Bytes)
+	if x == nil {
+		return nil, fmt.Errorf("invalid point format")
+	}
+	return &ecdsa.PublicKey{
+		Curve: curve,
+		X:     x,
+		Y:     y,
+	}, nil
+}
+
 type CertificateType int
 
 const (
@@ -992,6 +1073,15 @@ func (s *Slot) Generate(opts GenerateOptions) (crypto.PrivateKey, error) {
 	return nil, fmt.Errorf("no key parameters provided")
 }
 
+// https://datatracker.ietf.org/doc/html/rfc5480#section-2.1.1.1
+//
+// Generated with https://play.golang.org/p/tkqXov5Xpwp
+var (
+	p256OIDRaw = []byte{0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07}
+	p384OIDRaw = []byte{0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x22}
+	p521OIDRaw = []byte{0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x23}
+)
+
 // generateECDSA implements the CKM_ECDSA_KEY_PAIR_GEN mechanism.
 //
 // http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959719
@@ -1010,27 +1100,21 @@ func (s *Slot) generateECDSA(o GenerateOptions) (crypto.PrivateKey, error) {
 		return nil, fmt.Errorf("no curve provided")
 	}
 
-	// https://datatracker.ietf.org/doc/html/rfc5480#section-2.1.1.1
-	var oid asn1.ObjectIdentifier
+	var oid []byte
 	switch o.ECDSACurve.Params().Name {
 	case "P-256":
-		oid = asn1.ObjectIdentifier{1, 2, 840, 10045, 3, 1, 7}
+		oid = p256OIDRaw
 	case "P-384":
-		oid = asn1.ObjectIdentifier{1, 3, 132, 0, 34}
+		oid = p384OIDRaw
 	case "P-521":
-		oid = asn1.ObjectIdentifier{1, 3, 132, 0, 35}
+		oid = p521OIDRaw
 	default:
 		return nil, fmt.Errorf("unsupported ECDSA curve")
 	}
 
-	oidASN1, err := asn1.Marshal(oid)
-	if err != nil {
-		return nil, fmt.Errorf("marshal algorithm identifier: %v", err)
-	}
-
 	// When passing a struct or array to C, that value can't refer to Go
 	// memory. Allocate all attribute values in C rather than in Go.
-	cOID := (C.CK_VOID_PTR)(C.CBytes(oidASN1))
+	cOID := (C.CK_VOID_PTR)(C.CBytes(oid))
 	defer C.free(unsafe.Pointer(cOID))
 
 	cTrue := (C.CK_VOID_PTR)(C.malloc(C.sizeof_CK_BBOOL))
@@ -1058,7 +1142,7 @@ func (s *Slot) generateECDSA(o GenerateOptions) (crypto.PrivateKey, error) {
 	}
 
 	pubTmpl := []C.CK_ATTRIBUTE{
-		{C.CKA_EC_PARAMS, cOID, C.CK_ULONG(len(oidASN1))},
+		{C.CKA_EC_PARAMS, cOID, C.CK_ULONG(len(oid))},
 		{C.CKA_VERIFY, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
 	}
 	if o.LabelPublic != "" {
