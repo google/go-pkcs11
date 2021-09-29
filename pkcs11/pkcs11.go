@@ -30,7 +30,7 @@ package pkcs11
 #define NULL_PTR 0
 #endif
 
-#include "pkcs11.h"
+#include "../third_party/pkcs11/pkcs11.h"
 
 // Go can't call a C function pointer directly, so these are wrappers that
 // perform the dereference in C.
