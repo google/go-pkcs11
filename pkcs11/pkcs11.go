@@ -212,6 +212,26 @@ CK_RV ck_set_attribute_value(
 ) {
 	return (*fl->C_SetAttributeValue)(hSession, hObject, pTemplate, ulCount);
 }
+
+CK_RV ck_sign_init(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_MECHANISM_PTR pMechanism,
+	CK_OBJECT_HANDLE hKey
+) {
+	return (*fl->C_SignInit)(hSession, pMechanism, hKey);
+}
+
+CK_RV ck_sign(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_BYTE_PTR pData,
+	CK_ULONG ulDataLen,
+	CK_BYTE_PTR pSignature,
+	CK_ULONG_PTR pulSignatureLen
+) {
+	return (*fl->C_Sign)(hSession, pData, ulDataLen, pSignature, pulSignatureLen);
+}
 */
 // #cgo linux LDFLAGS: -ldl
 import "C"
@@ -223,6 +243,8 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"fmt"
+	"io"
+	"math/big"
 	"strings"
 	"unsafe"
 )
@@ -996,6 +1018,85 @@ func (o Object) ecdsaPublicKey() (crypto.PublicKey, error) {
 	}, nil
 }
 
+func (o Object) PrivateKey(pub crypto.PublicKey) (crypto.PrivateKey, error) {
+	if o.Class() != ClassPrivateKey {
+		return nil, fmt.Errorf("object has class: %s", o.Class())
+	}
+
+	kt := (*C.CK_KEY_TYPE)(C.malloc(C.sizeof_CK_KEY_TYPE))
+	defer C.free(unsafe.Pointer(kt))
+
+	attrs := []C.CK_ATTRIBUTE{
+		{C.CKA_KEY_TYPE, C.CK_VOID_PTR(kt), C.CK_ULONG(C.sizeof_CK_KEY_TYPE)},
+	}
+	if err := o.getAttribute(attrs); err != nil {
+		return nil, fmt.Errorf("getting certificate type: %w", err)
+	}
+	switch *kt {
+	case C.CKK_EC:
+		p, ok := pub.(*ecdsa.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf("expected ecdsa public key, got: %T", pub)
+		}
+		return &ecdsaPrivateKey{o, p}, nil
+	default:
+		return nil, fmt.Errorf("unsupported key type: 0x%x", *kt)
+	}
+}
+
+type ecdsaPrivateKey struct {
+	o   Object
+	pub *ecdsa.PublicKey
+}
+
+func (e *ecdsaPrivateKey) Public() crypto.PublicKey {
+	return e.pub
+}
+
+type ecdsaSignature struct {
+	R, S *big.Int
+}
+
+func (e *ecdsaPrivateKey) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	// http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/cs01/pkcs11-curr-v2.40-cs01.html#_Toc399398884
+	m := C.CK_MECHANISM{C.CKM_ECDSA, nil, 0}
+	rv := C.ck_sign_init(e.o.fl, e.o.h, &m, e.o.o)
+	if err := isOk("C_SignInit", rv); err != nil {
+		return nil, err
+	}
+
+	byteLen := (e.pub.Curve.Params().BitSize + 7) / 8
+	cSig := make([]C.CK_BYTE, byteLen*2)
+	cSigLen := C.CK_ULONG(len(cSig))
+
+	cBytes := make([]C.CK_BYTE, len(digest))
+	for i, b := range digest {
+		cBytes[i] = C.CK_BYTE(b)
+	}
+
+	rv = C.ck_sign(e.o.fl, e.o.h, &cBytes[0], C.CK_ULONG(len(digest)), &cSig[0], &cSigLen)
+	if err := isOk("C_Sign", rv); err != nil {
+		return nil, err
+	}
+
+	if int(cSigLen) != len(cSig) {
+		return nil, fmt.Errorf("expected signature of length %d, got %d", len(cSig), cSigLen)
+	}
+	sig := make([]byte, len(cSig))
+	for i, b := range cSig {
+		sig[i] = byte(b)
+	}
+
+	var (
+		r = big.NewInt(0)
+		s = big.NewInt(0)
+	)
+	r.SetBytes(sig[:len(sig)/2])
+	s.SetBytes(sig[len(sig)/2:])
+
+	return asn1.Marshal(ecdsaSignature{r, s})
+}
+
 type CertificateType int
 
 const (
@@ -1166,5 +1267,22 @@ func (s *Slot) generateECDSA(o GenerateOptions) (crypto.PrivateKey, error) {
 	if err := isOk("C_GenerateKeyPair", rv); err != nil {
 		return nil, err
 	}
-	return nil, nil
+
+	pubObj, err := s.newObject(pubH)
+	if err != nil {
+		return nil, fmt.Errorf("public key object: %w", err)
+	}
+	privObj, err := s.newObject(privH)
+	if err != nil {
+		return nil, fmt.Errorf("private key object: %w", err)
+	}
+	pub, err := pubObj.PublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("parsing public key: %w", err)
+	}
+	priv, err := privObj.PrivateKey(pub)
+	if err != nil {
+		return nil, fmt.Errorf("parsing private key: %w", err)
+	}
+	return priv, nil
 }

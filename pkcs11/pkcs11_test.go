@@ -16,8 +16,11 @@ package pkcs11
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -276,6 +279,49 @@ func TestECDSAPublicKey(t *testing.T) {
 			}
 			if _, ok := pub.(*ecdsa.PublicKey); !ok {
 				t.Errorf("PublicKey() unexpected type, got %T, want *ecdsa.PublicKey", pub)
+			}
+		})
+	}
+}
+
+func TestECDSAPrivateKey(t *testing.T) {
+	tests := []struct {
+		name  string
+		curve elliptic.Curve
+	}{
+		{"P256", elliptic.P256()},
+		{"P384", elliptic.P384()},
+		{"P521", elliptic.P521()},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := newTestSlot(t)
+
+			o := GenerateOptions{ECDSACurve: test.curve}
+			priv, err := s.Generate(o)
+			if err != nil {
+				t.Fatalf("Generate(%#v) failed: %v", o, err)
+			}
+			signer, ok := priv.(crypto.Signer)
+			if !ok {
+				t.Fatalf("Generate() key is unexpected type, got %T, want crypto.Signer", priv)
+			}
+			pub, ok := signer.Public().(*ecdsa.PublicKey)
+			if !ok {
+				t.Fatalf("Public() key is unexpected type, got %T, want *ecdsa.PublicKey", pub)
+			}
+
+			h := sha256.New()
+			h.Write([]byte("test"))
+			digest := h.Sum(nil)
+
+			sig, err := signer.Sign(rand.Reader, digest, crypto.SHA256)
+			if err != nil {
+				t.Fatalf("Sign() failed: %v", err)
+			}
+			if !ecdsa.VerifyASN1(pub, digest, sig) {
+				t.Errorf("Signature failed to verify")
 			}
 		})
 	}
