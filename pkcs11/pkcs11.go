@@ -169,6 +169,16 @@ CK_RV ck_find_objects_final(
 	return (*fl->C_FindObjectsFinal)(hSession);
 }
 
+CK_RV ck_create_object(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_ATTRIBUTE_PTR pTemplate,
+	CK_ULONG ulCount,
+	CK_OBJECT_HANDLE_PTR phObject
+) {
+	return (*fl->C_CreateObject)(hSession, pTemplate, ulCount, phObject);
+}
+
 CK_RV ck_get_attribute_value(
 	CK_FUNCTION_LIST_PTR fl,
 	CK_SESSION_HANDLE hSession,
@@ -178,11 +188,22 @@ CK_RV ck_get_attribute_value(
 ) {
 	return (*fl->C_GetAttributeValue)(hSession, hObject, pTemplate, ulCount);
 }
+
+CK_RV ck_set_attribute_value(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_OBJECT_HANDLE hObject,
+	CK_ATTRIBUTE_PTR pTemplate,
+	CK_ULONG ulCount
+) {
+	return (*fl->C_SetAttributeValue)(hSession, hObject, pTemplate, ulCount);
+}
 */
 // #cgo linux LDFLAGS: -ldl
 import "C"
 import (
 	"crypto"
+	"crypto/x509"
 	"encoding/asn1"
 	"fmt"
 	"strings"
@@ -225,6 +246,15 @@ func ckCString(s string) *C.CK_UTF8CHAR {
 		bs[i] = C.CK_UTF8CHAR(c)
 	}
 	return b
+}
+
+func ckGoString(s *C.CK_UTF8CHAR, n C.CK_ULONG) string {
+	var sb strings.Builder
+	sli := unsafe.Slice(s, n)
+	for _, b := range sli {
+		sb.WriteByte(byte(b))
+	}
+	return sb.String()
 }
 
 // Error is returned for cryptokit specific API codes.
@@ -560,28 +590,28 @@ func (s *Slot) LoginAdmin(adminPIN string) error {
 type Class int
 
 const (
-	Data Class = iota + 1
-	Certificate
-	PrivateKey
-	PublicKey
-	SecretKey
-	DomainParameters
+	ClassData Class = iota + 1
+	ClassCertificate
+	ClassPrivateKey
+	ClassPublicKey
+	ClassSecretKey
+	ClassDomainParameters
 	UnknownClass
 )
 
 func (c Class) ckType() (C.CK_OBJECT_CLASS, bool) {
 	switch c {
-	case Data:
+	case ClassData:
 		return C.CKO_DATA, true
-	case Certificate:
+	case ClassCertificate:
 		return C.CKO_CERTIFICATE, true
-	case PublicKey:
+	case ClassPublicKey:
 		return C.CKO_PUBLIC_KEY, true
-	case PrivateKey:
+	case ClassPrivateKey:
 		return C.CKO_PRIVATE_KEY, true
-	case SecretKey:
+	case ClassSecretKey:
 		return C.CKO_SECRET_KEY, true
-	case DomainParameters:
+	case ClassDomainParameters:
 		return C.CKO_DOMAIN_PARAMETERS, true
 	}
 	return 0, false
@@ -599,6 +629,75 @@ func (s *Slot) newObject(o C.CK_OBJECT_HANDLE) (Object, error) {
 		return Object{}, err
 	}
 	return Object{s.fl, s.h, o, *objClass}, nil
+}
+
+type CreateX509Certificate struct {
+	Certificate *x509.Certificate
+	Label       string
+}
+
+func (c CreateX509Certificate) isCreateOption() {}
+
+type CreateOption interface {
+	isCreateOption()
+}
+
+func (s *Slot) Create(o CreateOption) (*Object, error) {
+	switch o := o.(type) {
+	case CreateX509Certificate:
+		return s.createX509Certificate(o)
+	default:
+		return nil, fmt.Errorf("unsupported create option")
+	}
+}
+
+// http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959709
+func (s *Slot) createX509Certificate(o CreateX509Certificate) (*Object, error) {
+	if o.Certificate == nil {
+		return nil, fmt.Errorf("no certificate provided")
+	}
+	objClass := (*C.CK_OBJECT_CLASS)(C.malloc(C.sizeof_CK_OBJECT_CLASS))
+	defer C.free(unsafe.Pointer(objClass))
+	*objClass = C.CKO_CERTIFICATE
+
+	ct := (*C.CK_CERTIFICATE_TYPE)(C.malloc(C.sizeof_CK_CERTIFICATE_TYPE))
+	defer C.free(unsafe.Pointer(ct))
+	*ct = C.CKC_X_509
+
+	cSubj := C.CBytes(o.Certificate.RawSubject)
+	defer C.free(cSubj)
+
+	cValue := C.CBytes(o.Certificate.Raw)
+	defer C.free(cValue)
+
+	attrs := []C.CK_ATTRIBUTE{
+		{C.CKA_CLASS, C.CK_VOID_PTR(objClass), C.CK_ULONG(C.sizeof_CK_OBJECT_CLASS)},
+		{C.CKA_CERTIFICATE_TYPE, C.CK_VOID_PTR(ct), C.CK_ULONG(C.sizeof_CK_CERTIFICATE_TYPE)},
+		{C.CKA_SUBJECT, C.CK_VOID_PTR(cSubj), C.CK_ULONG(len(o.Certificate.RawSubject))},
+		{C.CKA_VALUE, C.CK_VOID_PTR(cValue), C.CK_ULONG(len(o.Certificate.Raw))},
+	}
+
+	if o.Label != "" {
+		cs := ckCString(o.Label)
+		defer C.free(unsafe.Pointer(cs))
+
+		attrs = append(attrs, C.CK_ATTRIBUTE{
+			C.CKA_LABEL,
+			C.CK_VOID_PTR(cs),
+			C.CK_ULONG(len(o.Label)),
+		})
+	}
+
+	var h C.CK_OBJECT_HANDLE
+	rv := C.ck_create_object(s.fl, s.h, &attrs[0], C.CK_ULONG(len(attrs)), &h)
+	if err := isOk("C_CreateObject", rv); err != nil {
+		return nil, err
+	}
+	obj, err := s.newObject(h)
+	if err != nil {
+		return nil, err
+	}
+	return &obj, nil
 }
 
 func ObjectLabel(label string) ObjectOption {
@@ -705,20 +804,59 @@ type Object struct {
 func (o Object) Class() Class {
 	switch o.c {
 	case C.CKO_DATA:
-		return Data
+		return ClassData
 	case C.CKO_CERTIFICATE:
-		return Certificate
+		return ClassCertificate
 	case C.CKO_PUBLIC_KEY:
-		return PublicKey
+		return ClassPublicKey
 	case C.CKO_PRIVATE_KEY:
-		return PrivateKey
+		return ClassPrivateKey
 	case C.CKO_SECRET_KEY:
-		return SecretKey
+		return ClassSecretKey
 	case C.CKO_DOMAIN_PARAMETERS:
-		return DomainParameters
+		return ClassDomainParameters
 	default:
 		return UnknownClass
 	}
+}
+
+func (o Object) getAttribute(attrs []C.CK_ATTRIBUTE) error {
+	return isOk("C_GetAttributeValue",
+		C.ck_get_attribute_value(o.fl, o.h, o.o, &attrs[0], C.CK_ULONG(len(attrs))),
+	)
+}
+
+func (o Object) setAttribute(attrs []C.CK_ATTRIBUTE) error {
+	return isOk("C_SetAttributeValue",
+		C.ck_set_attribute_value(o.fl, o.h, o.o, &attrs[0], C.CK_ULONG(len(attrs))),
+	)
+}
+
+// Label returns the label of an object.
+func (o Object) Label() (string, error) {
+	attrs := []C.CK_ATTRIBUTE{{C.CKA_LABEL, nil, 0}}
+	if err := o.getAttribute(attrs); err != nil {
+		return "", err
+	}
+	n := attrs[0].ulValueLen
+
+	cLabel := (*C.CK_UTF8CHAR)(C.malloc(C.ulong(n)))
+	defer C.free(unsafe.Pointer(cLabel))
+	attrs[0].pValue = C.CK_VOID_PTR(cLabel)
+
+	if err := o.getAttribute(attrs); err != nil {
+		return "", err
+	}
+	return ckGoString(cLabel, n), nil
+}
+
+// SetLabel sets the label of the object overwriting any previous value.
+func (o Object) SetLabel(s string) error {
+	cs := ckCString(s)
+	defer C.free(unsafe.Pointer(cs))
+
+	attrs := []C.CK_ATTRIBUTE{{C.CKA_LABEL, C.CK_VOID_PTR(cs), C.CK_ULONG(len(s))}}
+	return o.setAttribute(attrs)
 }
 
 type GenerateOption interface {
@@ -729,6 +867,10 @@ type GenerateOption interface {
 // slot.
 type GenerateECDSA struct {
 	Curve ECDSACurve
+	// Optional label for the public key object to be created with.
+	PublicLabel string
+	// Optional label for the private key object to be created with.
+	PrivateLabel string
 }
 
 func (g GenerateECDSA) isGenerateOption() {}
@@ -812,10 +954,32 @@ func (s *Slot) generateECDSA(o GenerateECDSA) (crypto.PrivateKey, error) {
 		{C.CKA_SIGN, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
 	}
 
+	if o.PrivateLabel != "" {
+		cs := ckCString(o.PrivateLabel)
+		defer C.free(unsafe.Pointer(cs))
+
+		privTmpl = append(privTmpl, C.CK_ATTRIBUTE{
+			C.CKA_LABEL,
+			C.CK_VOID_PTR(cs),
+			C.CK_ULONG(len(o.PrivateLabel)),
+		})
+	}
+
 	pubTmpl := []C.CK_ATTRIBUTE{
 		{C.CKA_EC_PARAMS, cOID, C.CK_ULONG(len(oidASN1))},
 		{C.CKA_VERIFY, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
 	}
+	if o.PublicLabel != "" {
+		cs := ckCString(o.PublicLabel)
+		defer C.free(unsafe.Pointer(cs))
+
+		pubTmpl = append(pubTmpl, C.CK_ATTRIBUTE{
+			C.CKA_LABEL,
+			C.CK_VOID_PTR(cs),
+			C.CK_ULONG(len(o.PublicLabel)),
+		})
+	}
+
 	rv := C.ck_generate_key_pair(
 		s.fl, s.h, &mechanism,
 		&pubTmpl[0], C.CK_ULONG(len(pubTmpl)),
