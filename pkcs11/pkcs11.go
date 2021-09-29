@@ -203,6 +203,7 @@ CK_RV ck_set_attribute_value(
 import "C"
 import (
 	"crypto"
+	"crypto/elliptic"
 	"crypto/x509"
 	"encoding/asn1"
 	"fmt"
@@ -356,28 +357,31 @@ func (m *Module) Close() error {
 	return nil
 }
 
-// SlotInitialize configures a slot object. Internally this calls C_InitToken.
-//
-// Different modules have different restrictions on the PIN value, and some
-// may refuse an empty PIN.
-func (m *Module) SlotInitialize(slotID uint32, label, adminPIN string) error {
+// CreateSlot configures a slot object. Internally this calls C_InitToken and
+// C_InitPIN to set the admin and user PIN on the slot.
+func (m *Module) CreateSlot(id uint32, opts SlotOptions) error {
+	if opts.Label == "" {
+		return fmt.Errorf("no label provided")
+	}
+	if opts.PIN == "" {
+		return fmt.Errorf("no user pin provided")
+	}
+	if opts.AdminPIN == "" {
+		return fmt.Errorf("no admin pin provided")
+	}
+
 	var cLabel [32]C.CK_UTF8CHAR
-	if !ckStringPadded(cLabel[:], label) {
+	if !ckStringPadded(cLabel[:], opts.Label) {
 		return fmt.Errorf("pkcs11: label too long")
 	}
 
-	cPIN := ckString(adminPIN)
+	cPIN := ckString(opts.AdminPIN)
 	cPINLen := C.CK_ULONG(len(cPIN))
-
-	var cPINPtr C.CK_UTF8CHAR_PTR
-	if len(adminPIN) > 0 {
-		cPINPtr = &cPIN[0]
-	}
 
 	rv := C.ck_init_token(
 		m.fl,
-		C.CK_SLOT_ID(slotID),
-		cPINPtr,
+		C.CK_SLOT_ID(id),
+		&cPIN[0],
 		cPINLen,
 		&cLabel[0],
 	)
@@ -385,6 +389,21 @@ func (m *Module) SlotInitialize(slotID uint32, label, adminPIN string) error {
 		return err
 	}
 
+	so := SessionOptions{
+		AdminPIN:  opts.AdminPIN,
+		ReadWrite: true,
+	}
+	s, err := m.Slot(id, so)
+	if err != nil {
+		return fmt.Errorf("getting slot: %w", err)
+	}
+	defer s.Close()
+	if err := s.initPIN(opts.PIN); err != nil {
+		return fmt.Errorf("configuring user pin: %w", err)
+	}
+	if err := s.logout(); err != nil {
+		return fmt.Errorf("logout: %v", err)
+	}
 	return nil
 }
 
@@ -498,31 +517,32 @@ type Slot struct {
 	h  C.CK_SESSION_HANDLE
 }
 
-// SlotOption is a configuration option for the slot session.
-type SlotOption interface {
-	isSlotOption()
+type SlotOptions struct {
+	AdminPIN string
+	PIN      string
+	Label    string
 }
 
-type slotOptionFlag C.CK_FLAGS
-
-func (f slotOptionFlag) isSlotOption() {}
-
-// SlotReadWrite indicates that the slot should be opened with write capabilities,
-// such as generating keys or importing certificates.
-//
-// By default, sessions can access objects and perform signing requests.
-func SlotReadWrite() SlotOption {
-	return slotOptionFlag(C.CKF_RW_SESSION)
+// SessionOption is a configuration option for the slot session.
+type SessionOptions struct {
+	PIN      string
+	AdminPIN string
+	// ReadWrite indicates that the slot should be opened with write capabilities,
+	// such as generating keys or importing certificates.
+	//
+	// By default, sessions can access objects and perform signing requests.
+	ReadWrite bool
 }
 
 // Slot creates a session with the given slot, by default read-only. Users
 // must call Close to release the session.
 //
-// SlotOption values can be provided to change the behavior of the slot
-// session.
-//
 // The returned Slot's behavior is undefined once the Module is closed.
-func (m *Module) Slot(id uint32, opts ...SlotOption) (*Slot, error) {
+func (m *Module) Slot(id uint32, opts SessionOptions) (*Slot, error) {
+	if opts.AdminPIN != "" && opts.PIN != "" {
+		return nil, fmt.Errorf("can't specify pin and admin pin")
+	}
+
 	var (
 		h      C.CK_SESSION_HANDLE
 		slotID = C.CK_SLOT_ID(id)
@@ -532,11 +552,8 @@ func (m *Module) Slot(id uint32, opts ...SlotOption) (*Slot, error) {
 		flags C.CK_FLAGS = C.CKF_SERIAL_SESSION
 	)
 
-	for _, o := range opts {
-		switch o := o.(type) {
-		case slotOptionFlag:
-			flags = flags | C.CK_FLAGS(o)
-		}
+	if opts.ReadWrite {
+		flags = flags | C.CKF_RW_SESSION
 	}
 
 	rv := C.ck_open_session(m.fl, slotID, flags, &h)
@@ -544,7 +561,22 @@ func (m *Module) Slot(id uint32, opts ...SlotOption) (*Slot, error) {
 		return nil, err
 	}
 
-	return &Slot{fl: m.fl, h: h}, nil
+	s := &Slot{fl: m.fl, h: h}
+
+	if opts.PIN != "" {
+		if err := s.login(opts.PIN); err != nil {
+			s.Close()
+			return nil, err
+		}
+	}
+	if opts.AdminPIN != "" {
+		if err := s.loginAdmin(opts.AdminPIN); err != nil {
+			s.Close()
+			return nil, err
+		}
+	}
+
+	return s, nil
 }
 
 // Close releases the slot session.
@@ -553,7 +585,7 @@ func (s *Slot) Close() error {
 }
 
 // TODO(ericchiang): merge with SlotInitialize.
-func (s *Slot) InitPIN(pin string) error {
+func (s *Slot) initPIN(pin string) error {
 	if pin == "" {
 		return fmt.Errorf("invalid pin")
 	}
@@ -562,11 +594,11 @@ func (s *Slot) InitPIN(pin string) error {
 	return isOk("C_InitPIN", C.ck_init_pin(s.fl, s.h, &cPIN[0], cPINLen))
 }
 
-func (s *Slot) Logout() error {
+func (s *Slot) logout() error {
 	return isOk("C_Logout", C.ck_logout(s.fl, s.h))
 }
 
-func (s *Slot) Login(pin string) error {
+func (s *Slot) login(pin string) error {
 	// TODO(ericchiang): check for CKR_USER_ALREADY_LOGGED_IN and auto logout.
 	if pin == "" {
 		return fmt.Errorf("invalid pin")
@@ -576,7 +608,7 @@ func (s *Slot) Login(pin string) error {
 	return isOk("C_Login", C.ck_login(s.fl, s.h, C.CKU_USER, &cPIN[0], cPINLen))
 }
 
-func (s *Slot) LoginAdmin(adminPIN string) error {
+func (s *Slot) loginAdmin(adminPIN string) error {
 	// TODO(ericchiang): maybe run commands, detect CKR_USER_NOT_LOGGED_IN, then
 	// automatically login?
 	if adminPIN == "" {
@@ -587,10 +619,10 @@ func (s *Slot) LoginAdmin(adminPIN string) error {
 	return isOk("C_Login", C.ck_login(s.fl, s.h, C.CKU_SO, &cPIN[0], cPINLen))
 }
 
-type Class int
+type ObjectClass int
 
 const (
-	ClassData Class = iota + 1
+	ClassData ObjectClass = iota + 1
 	ClassCertificate
 	ClassPrivateKey
 	ClassPublicKey
@@ -599,7 +631,7 @@ const (
 	UnknownClass
 )
 
-func (c Class) ckType() (C.CK_OBJECT_CLASS, bool) {
+func (c ObjectClass) ckType() (C.CK_OBJECT_CLASS, bool) {
 	switch c {
 	case ClassData:
 		return C.CKO_DATA, true
@@ -631,29 +663,22 @@ func (s *Slot) newObject(o C.CK_OBJECT_HANDLE) (Object, error) {
 	return Object{s.fl, s.h, o, *objClass}, nil
 }
 
-type CreateX509Certificate struct {
-	Certificate *x509.Certificate
-	Label       string
+type CreateOptions struct {
+	Label string
+
+	X509Certificate *x509.Certificate
 }
 
-func (c CreateX509Certificate) isCreateOption() {}
-
-type CreateOption interface {
-	isCreateOption()
-}
-
-func (s *Slot) Create(o CreateOption) (*Object, error) {
-	switch o := o.(type) {
-	case CreateX509Certificate:
-		return s.createX509Certificate(o)
-	default:
-		return nil, fmt.Errorf("unsupported create option")
+func (s *Slot) Create(opts CreateOptions) (*Object, error) {
+	if opts.X509Certificate != nil {
+		return s.createX509Certificate(opts)
 	}
+	return nil, fmt.Errorf("no objects provided to import")
 }
 
 // http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959709
-func (s *Slot) createX509Certificate(o CreateX509Certificate) (*Object, error) {
-	if o.Certificate == nil {
+func (s *Slot) createX509Certificate(opts CreateOptions) (*Object, error) {
+	if opts.X509Certificate == nil {
 		return nil, fmt.Errorf("no certificate provided")
 	}
 	objClass := (*C.CK_OBJECT_CLASS)(C.malloc(C.sizeof_CK_OBJECT_CLASS))
@@ -664,27 +689,27 @@ func (s *Slot) createX509Certificate(o CreateX509Certificate) (*Object, error) {
 	defer C.free(unsafe.Pointer(ct))
 	*ct = C.CKC_X_509
 
-	cSubj := C.CBytes(o.Certificate.RawSubject)
+	cSubj := C.CBytes(opts.X509Certificate.RawSubject)
 	defer C.free(cSubj)
 
-	cValue := C.CBytes(o.Certificate.Raw)
+	cValue := C.CBytes(opts.X509Certificate.Raw)
 	defer C.free(cValue)
 
 	attrs := []C.CK_ATTRIBUTE{
 		{C.CKA_CLASS, C.CK_VOID_PTR(objClass), C.CK_ULONG(C.sizeof_CK_OBJECT_CLASS)},
 		{C.CKA_CERTIFICATE_TYPE, C.CK_VOID_PTR(ct), C.CK_ULONG(C.sizeof_CK_CERTIFICATE_TYPE)},
-		{C.CKA_SUBJECT, C.CK_VOID_PTR(cSubj), C.CK_ULONG(len(o.Certificate.RawSubject))},
-		{C.CKA_VALUE, C.CK_VOID_PTR(cValue), C.CK_ULONG(len(o.Certificate.Raw))},
+		{C.CKA_SUBJECT, C.CK_VOID_PTR(cSubj), C.CK_ULONG(len(opts.X509Certificate.RawSubject))},
+		{C.CKA_VALUE, C.CK_VOID_PTR(cValue), C.CK_ULONG(len(opts.X509Certificate.Raw))},
 	}
 
-	if o.Label != "" {
-		cs := ckCString(o.Label)
+	if opts.Label != "" {
+		cs := ckCString(opts.Label)
 		defer C.free(unsafe.Pointer(cs))
 
 		attrs = append(attrs, C.CK_ATTRIBUTE{
 			C.CKA_LABEL,
 			C.CK_VOID_PTR(cs),
-			C.CK_ULONG(len(o.Label)),
+			C.CK_ULONG(len(opts.Label)),
 		})
 	}
 
@@ -700,47 +725,31 @@ func (s *Slot) createX509Certificate(o CreateX509Certificate) (*Object, error) {
 	return &obj, nil
 }
 
-func ObjectLabel(label string) ObjectOption {
-	return objectLabel(label)
-}
-
-func ObjectClass(class Class) ObjectOption {
-	return objectClass(class)
-}
-
-type objectClass Class
-type objectLabel string
-
-func (o objectClass) isObjectOption() {}
-func (o objectLabel) isObjectOption() {}
-
-type ObjectOption interface {
-	isObjectOption()
+type ObjectOptions struct {
+	Class ObjectClass
+	Label string
 }
 
 // Objects searches a slot for objects that match the given options, or all
 // objects if no options are provided.
 //
 // The returned objects behavior is undefined once the Slot object is closed.
-func (s *Slot) Objects(opts ...ObjectOption) ([]Object, error) {
+func (s *Slot) Objects(opts ObjectOptions) ([]Object, error) {
 	var attrs []C.CK_ATTRIBUTE
-	for _, o := range opts {
-		switch o := o.(type) {
-		case objectLabel:
-			l := string(o)
-			cs := ckCString(l)
-			defer C.free(unsafe.Pointer(cs))
+	if opts.Label != "" {
+		cs := ckCString(opts.Label)
+		defer C.free(unsafe.Pointer(cs))
 
-			attrs = append(attrs, C.CK_ATTRIBUTE{
-				C.CKA_LABEL,
-				C.CK_VOID_PTR(cs),
-				C.CK_ULONG(len(l)),
-			})
-		case objectClass:
-			c, ok := Class(o).ckType()
-			if !ok {
-				continue
-			}
+		attrs = append(attrs, C.CK_ATTRIBUTE{
+			C.CKA_LABEL,
+			C.CK_VOID_PTR(cs),
+			C.CK_ULONG(len(opts.Label)),
+		})
+	}
+
+	if opts.Class != 0 {
+		c, ok := ObjectClass(opts.Class).ckType()
+		if ok {
 			objClass := C.CK_OBJECT_CLASS_PTR(C.malloc(C.sizeof_CK_OBJECT_CLASS))
 			defer C.free(unsafe.Pointer(objClass))
 
@@ -750,8 +759,6 @@ func (s *Slot) Objects(opts ...ObjectOption) ([]Object, error) {
 				C.CK_VOID_PTR(objClass),
 				C.CK_ULONG(C.sizeof_CK_OBJECT_CLASS),
 			})
-		default:
-			return nil, fmt.Errorf("unrecongized object option: %T", o)
 		}
 	}
 
@@ -801,7 +808,7 @@ type Object struct {
 	c  C.CK_OBJECT_CLASS
 }
 
-func (o Object) Class() Class {
+func (o Object) Class() ObjectClass {
 	switch o.c {
 	case C.CKO_DATA:
 		return ClassData
@@ -859,49 +866,32 @@ func (o Object) SetLabel(s string) error {
 	return o.setAttribute(attrs)
 }
 
-type GenerateOption interface {
-	isGenerateOption()
+type GenerateOptions struct {
+	// RSABits indicates that the generated key should be a RSA key and also
+	// provides the number of bits.
+	RSABits int
+
+	// ECDSACurve indicates that the generated key should be an ECDSA key and
+	// identifies the curve used to generate the key.
+	ECDSACurve elliptic.Curve
+
+	// Label for the final object.
+	LabelPublic  string
+	LabelPrivate string
 }
-
-// GenerateCDSA is a generation option that creates an ECDSA private key on the
-// slot.
-type GenerateECDSA struct {
-	Curve ECDSACurve
-	// Optional label for the public key object to be created with.
-	PublicLabel string
-	// Optional label for the private key object to be created with.
-	PrivateLabel string
-}
-
-func (g GenerateECDSA) isGenerateOption() {}
-
-type ECDSACurve int
-
-const (
-	P256 ECDSACurve = iota + 1
-	P384
-	P521
-)
 
 // https://datatracker.ietf.org/doc/html/rfc5480#section-2.1.1.1
 
 // Generate a private key on the slot, creating associated private and public
 // key objects.
-//
-// Generate accepts GenerateECDSA or GenerateRSA.
-//
-//		o := pkcs11.GenerateECDSA{
-//			Curve: pkcs11.PS256,
-//		}
-//		priv, err := m.Generate(o)
-//
-func (s *Slot) Generate(opts GenerateOption) (crypto.PrivateKey, error) {
-	switch o := opts.(type) {
-	case GenerateECDSA:
-		return s.generateECDSA(o)
-	default:
-		return nil, fmt.Errorf("unreachable")
+func (s *Slot) Generate(opts GenerateOptions) (crypto.PrivateKey, error) {
+	if opts.ECDSACurve != nil && opts.RSABits != 0 {
+		return nil, fmt.Errorf("conflicting key parameters provided")
 	}
+	if opts.ECDSACurve != nil {
+		return s.generateECDSA(opts)
+	}
+	return nil, fmt.Errorf("no key parameters provided")
 }
 
 // generateECDSA implements the CKM_ECDSA_KEY_PAIR_GEN mechanism.
@@ -909,7 +899,7 @@ func (s *Slot) Generate(opts GenerateOption) (crypto.PrivateKey, error) {
 // http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959719
 // https://datatracker.ietf.org/doc/html/rfc5480#section-2.1.1.1
 // http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/os/pkcs11-curr-v2.40-os.html#_Toc416960014
-func (s *Slot) generateECDSA(o GenerateECDSA) (crypto.PrivateKey, error) {
+func (s *Slot) generateECDSA(o GenerateOptions) (crypto.PrivateKey, error) {
 	var (
 		mechanism = C.CK_MECHANISM{
 			mechanism: C.CKM_EC_KEY_PAIR_GEN,
@@ -918,14 +908,18 @@ func (s *Slot) generateECDSA(o GenerateECDSA) (crypto.PrivateKey, error) {
 		privH C.CK_OBJECT_HANDLE
 	)
 
+	if o.ECDSACurve == nil {
+		return nil, fmt.Errorf("no curve provided")
+	}
+
 	// https://datatracker.ietf.org/doc/html/rfc5480#section-2.1.1.1
 	var oid asn1.ObjectIdentifier
-	switch o.Curve {
-	case P256:
+	switch o.ECDSACurve.Params().Name {
+	case "P-256":
 		oid = asn1.ObjectIdentifier{1, 2, 840, 10045, 3, 1, 7}
-	case P384:
+	case "P-384":
 		oid = asn1.ObjectIdentifier{1, 3, 132, 0, 34}
-	case P521:
+	case "P-521":
 		oid = asn1.ObjectIdentifier{1, 3, 132, 0, 35}
 	default:
 		return nil, fmt.Errorf("unsupported ECDSA curve")
@@ -954,14 +948,14 @@ func (s *Slot) generateECDSA(o GenerateECDSA) (crypto.PrivateKey, error) {
 		{C.CKA_SIGN, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
 	}
 
-	if o.PrivateLabel != "" {
-		cs := ckCString(o.PrivateLabel)
+	if o.LabelPrivate != "" {
+		cs := ckCString(o.LabelPrivate)
 		defer C.free(unsafe.Pointer(cs))
 
 		privTmpl = append(privTmpl, C.CK_ATTRIBUTE{
 			C.CKA_LABEL,
 			C.CK_VOID_PTR(cs),
-			C.CK_ULONG(len(o.PrivateLabel)),
+			C.CK_ULONG(len(o.LabelPrivate)),
 		})
 	}
 
@@ -969,14 +963,14 @@ func (s *Slot) generateECDSA(o GenerateECDSA) (crypto.PrivateKey, error) {
 		{C.CKA_EC_PARAMS, cOID, C.CK_ULONG(len(oidASN1))},
 		{C.CKA_VERIFY, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
 	}
-	if o.PublicLabel != "" {
-		cs := ckCString(o.PublicLabel)
+	if o.LabelPublic != "" {
+		cs := ckCString(o.LabelPublic)
 		defer C.free(unsafe.Pointer(cs))
 
 		pubTmpl = append(pubTmpl, C.CK_ATTRIBUTE{
 			C.CKA_LABEL,
 			C.CK_VOID_PTR(cs),
-			C.CK_ULONG(len(o.PublicLabel)),
+			C.CK_ULONG(len(o.LabelPublic)),
 		})
 	}
 

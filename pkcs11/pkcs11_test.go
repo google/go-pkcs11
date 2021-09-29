@@ -1,6 +1,7 @@
 package pkcs11
 
 import (
+	"crypto/elliptic"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -16,6 +17,10 @@ import (
 const (
 	libSoftHSMPath = "/usr/lib/softhsm/libsofthsm2.so"
 	syslogPath     = "/var/log/syslog"
+
+	testAdminPIN = "12345"
+	testPIN      = "1234"
+	testLabel    = "label"
 )
 
 func newTestModule(t *testing.T) *Module {
@@ -84,14 +89,42 @@ directories.tokendir = %s
 	return m
 }
 
+func newTestSlot(t *testing.T) *Slot {
+	m := newTestModule(t)
+	opts := SlotOptions{
+		AdminPIN: testAdminPIN,
+		PIN:      testPIN,
+		Label:    testLabel,
+	}
+	if err := m.CreateSlot(0, opts); err != nil {
+		t.Fatalf("CreateSlot(0, %v): %v", opts, err)
+	}
+
+	s, err := m.Slot(0, SessionOptions{PIN: testPIN, ReadWrite: true})
+	if err != nil {
+		t.Fatalf("Slot(0): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("Closing slot: %v", err)
+		}
+	})
+	return s
+}
+
 func TestNewModule(t *testing.T) {
 	newTestModule(t)
 }
 
 func TestSlotInit(t *testing.T) {
 	m := newTestModule(t)
-	if err := m.SlotInitialize(0, "test", "1234"); err != nil {
-		t.Fatalf("SlotInitialize(0, 'test', '1234'): %v", err)
+	opts := SlotOptions{
+		AdminPIN: testAdminPIN,
+		PIN:      testPIN,
+		Label:    testLabel,
+	}
+	if err := m.CreateSlot(0, opts); err != nil {
+		t.Fatalf("CreateSlot(0, %v): %v", opts, err)
 	}
 }
 
@@ -121,15 +154,20 @@ func TestInfo(t *testing.T) {
 
 func TestSlotInfo(t *testing.T) {
 	m := newTestModule(t)
-	if err := m.SlotInitialize(0, "test", "1234"); err != nil {
-		t.Fatalf("SlotInitialize(0, 'test', '1234'): %v", err)
+	opts := SlotOptions{
+		AdminPIN: testAdminPIN,
+		PIN:      testPIN,
+		Label:    testLabel,
+	}
+	if err := m.CreateSlot(0, opts); err != nil {
+		t.Fatalf("CreateSlot(0, %v): %v", opts, err)
 	}
 
 	info, err := m.SlotInfo(0)
 	if err != nil {
 		t.Fatalf("SlotInfo(0): %v", err)
 	}
-	wantLabel := "test"
+	wantLabel := testLabel
 	if info.Label != wantLabel {
 		t.Errorf("SlotInfo() unexpected label, got %s, want %s", info.Label, wantLabel)
 	}
@@ -138,19 +176,26 @@ func TestSlotInfo(t *testing.T) {
 func TestSlot(t *testing.T) {
 	tests := []struct {
 		name string
-		opts []SlotOption
+		opts SessionOptions
 	}{
-		{"Default", []SlotOption{}},
-		{"RWSession", []SlotOption{SlotReadWrite()}},
+		{"Default", SessionOptions{}},
+		{"RWSession", SessionOptions{ReadWrite: true}},
+		{"PIN", SessionOptions{PIN: testPIN}},
+		{"AdminPIN", SessionOptions{ReadWrite: true, AdminPIN: testAdminPIN}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			m := newTestModule(t)
-			if err := m.SlotInitialize(0, "test", "1234"); err != nil {
-				t.Fatalf("SlotInitialize(0, 'test', '1234'): %v", err)
+			opts := SlotOptions{
+				AdminPIN: testAdminPIN,
+				PIN:      testPIN,
+				Label:    testLabel,
+			}
+			if err := m.CreateSlot(0, opts); err != nil {
+				t.Fatalf("CreateSlot(0, %v): %v", opts, err)
 			}
 
-			s, err := m.Slot(0, test.opts...)
+			s, err := m.Slot(0, test.opts)
 			if err != nil {
 				t.Fatalf("Slot(0): %v", err)
 			}
@@ -164,42 +209,18 @@ func TestSlot(t *testing.T) {
 func TestGenerateECDSA(t *testing.T) {
 	tests := []struct {
 		name  string
-		curve ECDSACurve
+		curve elliptic.Curve
 	}{
-		{"P256", P256},
-		{"P384", P384},
-		{"P521", P521},
+		{"P256", elliptic.P256()},
+		{"P384", elliptic.P384()},
+		{"P521", elliptic.P521()},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			m := newTestModule(t)
-			if err := m.SlotInitialize(0, "test", "1234"); err != nil {
-				t.Fatalf("SlotInitialize(0, 'test', '1234'): %v", err)
-			}
+			s := newTestSlot(t)
 
-			s, err := m.Slot(0, SlotReadWrite())
-			if err != nil {
-				t.Fatalf("Slot(0): %v", err)
-			}
-			defer s.Close()
-			if err := s.LoginAdmin("1234"); err != nil {
-				t.Fatalf("authenicating as admin: %v", err)
-			}
-
-			if err := s.InitPIN("12345"); err != nil {
-				t.Fatalf("initializing user pin: %v", err)
-			}
-
-			if err := s.Logout(); err != nil {
-				t.Fatalf("logout: %v", err)
-			}
-
-			if err := s.Login("12345"); err != nil {
-				t.Fatalf("authenicating as admin: %v", err)
-			}
-
-			o := GenerateECDSA{Curve: test.curve}
+			o := GenerateOptions{ECDSACurve: test.curve}
 			if _, err := s.Generate(o); err != nil {
 				t.Fatalf("Generate(%#v) failed: %v", o, err)
 			}
@@ -210,57 +231,32 @@ func TestGenerateECDSA(t *testing.T) {
 func TestObjects(t *testing.T) {
 	tests := []struct {
 		name string
-		opts []ObjectOption
-		want []Class
+		opts ObjectOptions
+		want []ObjectClass
 	}{
-		{"AllObjects", []ObjectOption{}, []Class{ClassPublicKey, ClassPrivateKey}},
-		{"PrivateKey", []ObjectOption{ObjectClass(ClassPrivateKey)}, []Class{ClassPrivateKey}},
-		{"PublicKey", []ObjectOption{ObjectClass(ClassPublicKey)}, []Class{ClassPublicKey}},
-		{"ByLabel", []ObjectOption{ObjectLabel("privatekey")}, []Class{ClassPrivateKey}},
+		{"AllObjects", ObjectOptions{}, []ObjectClass{ClassPublicKey, ClassPrivateKey}},
+		{"PrivateKey", ObjectOptions{Class: ClassPrivateKey}, []ObjectClass{ClassPrivateKey}},
+		{"PublicKey", ObjectOptions{Class: ClassPublicKey}, []ObjectClass{ClassPublicKey}},
+		{"ByLabel", ObjectOptions{Label: "privatekey"}, []ObjectClass{ClassPrivateKey}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			m := newTestModule(t)
-			if err := m.SlotInitialize(0, "test", "1234"); err != nil {
-				t.Fatalf("SlotInitialize(0, 'test', '1234'): %v", err)
-			}
+			s := newTestSlot(t)
 
-			s, err := m.Slot(0, SlotReadWrite())
-			if err != nil {
-				t.Fatalf("Slot(0): %v", err)
-			}
-			defer s.Close()
-			if err := s.LoginAdmin("1234"); err != nil {
-				t.Fatalf("authenicating as admin: %v", err)
-			}
-
-			if err := s.InitPIN("12345"); err != nil {
-				t.Fatalf("initializing user pin: %v", err)
-			}
-
-			if err := s.Logout(); err != nil {
-				t.Fatalf("logout: %v", err)
-			}
-
-			if err := s.Login("12345"); err != nil {
-				t.Fatalf("authenicating as admin: %v", err)
-			}
-
-			o := GenerateECDSA{
-				Curve:        P256,
-				PrivateLabel: "privatekey",
-				PublicLabel:  "publickey",
+			o := GenerateOptions{
+				ECDSACurve:   elliptic.P256(),
+				LabelPrivate: "privatekey",
 			}
 			if _, err := s.Generate(o); err != nil {
 				t.Fatalf("Generate(%#v) failed: %v", o, err)
 			}
 
-			objs, err := s.Objects(test.opts...)
+			objs, err := s.Objects(test.opts)
 			if err != nil {
 				t.Fatalf("Slot(0).Objects(): %v", err)
 			}
 
-			var got []Class
+			var got []ObjectClass
 			for _, o := range objs {
 				got = append(got, o.Class())
 			}
@@ -319,38 +315,14 @@ func mustParseCertificate(s string) *x509.Certificate {
 }
 
 func TestCreateCertificate(t *testing.T) {
-	m := newTestModule(t)
-	if err := m.SlotInitialize(0, "test", "1234"); err != nil {
-		t.Fatalf("SlotInitialize(0, 'test', '1234'): %v", err)
-	}
-
-	s, err := m.Slot(0, SlotReadWrite())
-	if err != nil {
-		t.Fatalf("Slot(0): %v", err)
-	}
-	defer s.Close()
-	if err := s.LoginAdmin("1234"); err != nil {
-		t.Fatalf("authenicating as admin: %v", err)
-	}
-
-	if err := s.InitPIN("12345"); err != nil {
-		t.Fatalf("initializing user pin: %v", err)
-	}
-
-	if err := s.Logout(); err != nil {
-		t.Fatalf("logout: %v", err)
-	}
-
-	if err := s.Login("12345"); err != nil {
-		t.Fatalf("authenicating as admin: %v", err)
-	}
+	s := newTestSlot(t)
 
 	cert := mustParseCertificate(testCertData)
 
 	want := "testcert"
-	opt := CreateX509Certificate{
-		Certificate: cert,
-		Label:       want,
+	opt := CreateOptions{
+		X509Certificate: cert,
+		Label:           want,
 	}
 	o, err := s.Create(opt)
 	if err != nil {
