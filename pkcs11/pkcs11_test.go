@@ -1,6 +1,7 @@
 package pkcs11
 
 import (
+	"bytes"
 	"crypto/elliptic"
 	"crypto/x509"
 	"encoding/pem"
@@ -346,5 +347,17 @@ func TestCreateCertificate(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("Label() did not match after setting it, got %s, want %s", got, want)
+	}
+
+	c, err := o.Certificate()
+	if err != nil {
+		t.Fatalf("Certificate(): %v", err)
+	}
+	gotCert, err := c.X509()
+	if err != nil {
+		t.Fatalf("Getting X509() certificate: %v", err)
+	}
+	if !bytes.Equal(gotCert.Raw, cert.Raw) {
+		t.Errorf("Returned certificate did not match loaded certificate")
 	}
 }

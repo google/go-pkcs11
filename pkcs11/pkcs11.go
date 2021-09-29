@@ -631,6 +631,25 @@ const (
 	UnknownClass
 )
 
+func (c ObjectClass) String() string {
+	switch c {
+	case ClassData:
+		return "data"
+	case ClassCertificate:
+		return "certificate"
+	case ClassPublicKey:
+		return "public key"
+	case ClassPrivateKey:
+		return "private key"
+	case ClassSecretKey:
+		return "secret key"
+	case ClassDomainParameters:
+		return "domain parameters"
+	}
+	return "unknown object class"
+
+}
+
 func (c ObjectClass) ckType() (C.CK_OBJECT_CLASS, bool) {
 	switch c {
 	case ClassData:
@@ -864,6 +883,71 @@ func (o Object) SetLabel(s string) error {
 
 	attrs := []C.CK_ATTRIBUTE{{C.CKA_LABEL, C.CK_VOID_PTR(cs), C.CK_ULONG(len(s))}}
 	return o.setAttribute(attrs)
+}
+
+func (o Object) Certificate() (*Certificate, error) {
+	if o.Class() != ClassCertificate {
+		return nil, fmt.Errorf("object has class: %s", o.Class())
+	}
+	ct := (*C.CK_CERTIFICATE_TYPE)(C.malloc(C.sizeof_CK_CERTIFICATE_TYPE))
+	defer C.free(unsafe.Pointer(ct))
+
+	attrs := []C.CK_ATTRIBUTE{
+		{C.CKA_CERTIFICATE_TYPE, C.CK_VOID_PTR(ct), C.CK_ULONG(C.sizeof_CK_CERTIFICATE_TYPE)},
+	}
+	if err := o.getAttribute(attrs); err != nil {
+		return nil, fmt.Errorf("getting certificate type: %w", err)
+	}
+	return &Certificate{o, *ct}, nil
+}
+
+type CertificateType int
+
+const (
+	CertificateX509 = iota + 1
+)
+
+type Certificate struct {
+	o Object
+	t C.CK_CERTIFICATE_TYPE
+}
+
+func (c *Certificate) Type() CertificateType {
+	return 0
+}
+
+func (c *Certificate) X509() (*x509.Certificate, error) {
+	// http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959712
+	if c.t != C.CKC_X_509 {
+		return nil, fmt.Errorf("invalid certificate type")
+	}
+
+	// TODO(ericchiang): Do we want to support CKA_URL?
+	var n C.CK_ULONG
+	attrs := []C.CK_ATTRIBUTE{
+		{C.CKA_VALUE, nil, n},
+	}
+	if err := c.o.getAttribute(attrs); err != nil {
+		return nil, fmt.Errorf("getting certificate type: %w", err)
+	}
+	n = attrs[0].ulValueLen
+	if n == 0 {
+		return nil, fmt.Errorf("certificate value not present")
+	}
+	cRaw := (C.CK_VOID_PTR)(C.malloc(C.ulong(n)))
+	defer C.free(unsafe.Pointer(cRaw))
+
+	attrs[0].pValue = cRaw
+	if err := c.o.getAttribute(attrs); err != nil {
+		return nil, fmt.Errorf("getting certificate type: %w", err)
+	}
+
+	raw := C.GoBytes(unsafe.Pointer(cRaw), C.int(n))
+	cert, err := x509.ParseCertificate(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parsing certificate: %v", err)
+	}
+	return cert, nil
 }
 
 type GenerateOptions struct {
