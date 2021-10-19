@@ -1097,21 +1097,50 @@ func (e *ecdsaPrivateKey) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpt
 	return asn1.Marshal(ecdsaSignature{r, s})
 }
 
+// CertificateType determines the kind of certificate a certificate object holds.
+// This can be X.509, WTLS, GPG, etc.
+//
+// http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959709
 type CertificateType int
 
+// Certificate types supported by this package.
 const (
-	CertificateX509 = iota + 1
+	CertificateX509 CertificateType = iota + 1
+	CertificateUnknown
 )
 
+// Certificate holds a certificate object. Because certificates object can hold
+// various kinds of certificates, callers should check the type before calling
+// methods that parse the certificate.
+//
+// 		cert, err := obj.Certificate()
+//		if err != nil {
+//			// ...
+//		}
+//		if cert.Type() != pkcs11.CertificateX509 {
+//			// unexpected kind of certificate ...
+//		}
+//		x509Cert, err := cert.X509()
+//
 type Certificate struct {
 	o Object
 	t C.CK_CERTIFICATE_TYPE
 }
 
+// Type returns the format of the underlying certificate.
 func (c *Certificate) Type() CertificateType {
-	return 0
+	switch c.t {
+	case C.CKC_X_509:
+		return CertificateX509
+	default:
+		return CertificateUnknown
+	}
 }
 
+// X509 parses the underlying certificate as an X.509 certificate.
+//
+// If the certificate holds a different type of certificate, this method
+// returns an error.
 func (c *Certificate) X509() (*x509.Certificate, error) {
 	// http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959712
 	if c.t != C.CKC_X_509 {
@@ -1146,11 +1175,11 @@ func (c *Certificate) X509() (*x509.Certificate, error) {
 	return cert, nil
 }
 
-type GenerateOptions struct {
+// KeyOptions holds parameters used for generating a private key.
+type KeyOptions struct {
 	// RSABits indicates that the generated key should be a RSA key and also
 	// provides the number of bits.
 	RSABits int
-
 	// ECDSACurve indicates that the generated key should be an ECDSA key and
 	// identifies the curve used to generate the key.
 	ECDSACurve elliptic.Curve
@@ -1164,7 +1193,7 @@ type GenerateOptions struct {
 
 // Generate a private key on the slot, creating associated private and public
 // key objects.
-func (s *Slot) Generate(opts GenerateOptions) (crypto.PrivateKey, error) {
+func (s *Slot) Generate(opts KeyOptions) (crypto.PrivateKey, error) {
 	if opts.ECDSACurve != nil && opts.RSABits != 0 {
 		return nil, fmt.Errorf("conflicting key parameters provided")
 	}
@@ -1188,7 +1217,7 @@ var (
 // http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959719
 // https://datatracker.ietf.org/doc/html/rfc5480#section-2.1.1.1
 // http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/os/pkcs11-curr-v2.40-os.html#_Toc416960014
-func (s *Slot) generateECDSA(o GenerateOptions) (crypto.PrivateKey, error) {
+func (s *Slot) generateECDSA(o KeyOptions) (crypto.PrivateKey, error) {
 	var (
 		mechanism = C.CK_MECHANISM{
 			mechanism: C.CKM_EC_KEY_PAIR_GEN,

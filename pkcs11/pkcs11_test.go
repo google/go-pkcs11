@@ -239,7 +239,7 @@ func TestGenerateECDSA(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			s := newTestSlot(t)
 
-			o := GenerateOptions{ECDSACurve: test.curve}
+			o := KeyOptions{ECDSACurve: test.curve}
 			if _, err := s.Generate(o); err != nil {
 				t.Fatalf("Generate(%#v) failed: %v", o, err)
 			}
@@ -261,7 +261,7 @@ func TestECDSAPublicKey(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			s := newTestSlot(t)
 
-			o := GenerateOptions{ECDSACurve: test.curve}
+			o := KeyOptions{ECDSACurve: test.curve}
 			if _, err := s.Generate(o); err != nil {
 				t.Fatalf("Generate(%#v) failed: %v", o, err)
 			}
@@ -298,7 +298,7 @@ func TestECDSAPrivateKey(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			s := newTestSlot(t)
 
-			o := GenerateOptions{ECDSACurve: test.curve}
+			o := KeyOptions{ECDSACurve: test.curve}
 			priv, err := s.Generate(o)
 			if err != nil {
 				t.Fatalf("Generate(%#v) failed: %v", o, err)
@@ -342,7 +342,7 @@ func TestObjects(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			s := newTestSlot(t)
 
-			o := GenerateOptions{
+			o := KeyOptions{
 				ECDSACurve:   elliptic.P256(),
 				LabelPrivate: "privatekey",
 			}
