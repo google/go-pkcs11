@@ -13,6 +13,8 @@
 // limitations under the License.
 
 // Package pkcs11 implements logic for using PKCS #11 shared libraries.
+//
+// WARNING: The API exposed by this package is experimental and will change.
 package pkcs11
 
 /*
