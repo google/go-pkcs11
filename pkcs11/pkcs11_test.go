@@ -23,6 +23,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -32,6 +33,9 @@ import (
 	"strings"
 	"testing"
 )
+
+var requireSoftHSMv2 = flag.Bool("require-libsofthsm2", false,
+	"When set, tests will fail if libsofthsm2 is not available.")
 
 const (
 	libSoftHSMPath = "/usr/lib/softhsm/libsofthsm2.so"
@@ -44,8 +48,11 @@ const (
 
 func newTestModule(t *testing.T) *Module {
 	if _, err := os.Stat(libSoftHSMPath); err != nil {
+		if *requireSoftHSMv2 {
+			t.Fatalf("libsofthsm2 not installed")
+		}
 		// TODO(ericchiang): do an actual lookup of registered PKCS #11 modules.
-		t.Skipf("libsofthsm not installed, skipping testing")
+		t.Skipf("libsofthsm2 not installed, skipping testing")
 	}
 
 	// Open syslog file and seek to end before the tests starts. Anything read

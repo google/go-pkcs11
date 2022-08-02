@@ -20,10 +20,16 @@ jobs:
       with:
         go-version: ${{ matrix.go-version }}
     - name: Install libsofthsm2
-      run: apt-get install -y libsofthsm2
+      run: sudo apt-get install -y libsofthsm2
+    - name: Install staticcheck
+      run: go install honnef.co/go/tools/cmd/staticcheck@v0.3.3
     - name: Checkout code
       uses: actions/checkout@v2
     - name: Build
       run: go build ./...
     - name: Test
-      run: go test ./...
+      run: go test ./... -require-libsofthsm2
+    - name: Vet
+      run: go vet ./...
+    - name: staticcheck
+      run: staticcheck ./...
