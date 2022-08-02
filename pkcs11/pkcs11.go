@@ -240,6 +240,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/asn1"
 	"fmt"
@@ -303,7 +304,101 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return fmt.Sprintf("pkcs11: %s() 0x%x", e.fnName, e.code)
+	code, ok := ckRVString[e.code]
+	if !ok {
+		code = fmt.Sprintf("0x%x", e.code)
+	}
+	return fmt.Sprintf("pkcs11: %s() %s", e.fnName, code)
+}
+
+var ckRVString = map[C.CK_RV]string{
+	C.CKR_CANCEL:                           "CKR_CANCEL",
+	C.CKR_HOST_MEMORY:                      "CKR_HOST_MEMORY",
+	C.CKR_SLOT_ID_INVALID:                  "CKR_SLOT_ID_INVALID",
+	C.CKR_GENERAL_ERROR:                    "CKR_GENERAL_ERROR",
+	C.CKR_FUNCTION_FAILED:                  "CKR_FUNCTION_FAILED",
+	C.CKR_ARGUMENTS_BAD:                    "CKR_ARGUMENTS_BAD",
+	C.CKR_NO_EVENT:                         "CKR_NO_EVENT",
+	C.CKR_NEED_TO_CREATE_THREADS:           "CKR_NEED_TO_CREATE_THREADS",
+	C.CKR_CANT_LOCK:                        "CKR_CANT_LOCK",
+	C.CKR_ATTRIBUTE_READ_ONLY:              "CKR_ATTRIBUTE_READ_ONLY",
+	C.CKR_ATTRIBUTE_SENSITIVE:              "CKR_ATTRIBUTE_SENSITIVE",
+	C.CKR_ATTRIBUTE_TYPE_INVALID:           "CKR_ATTRIBUTE_TYPE_INVALID",
+	C.CKR_ATTRIBUTE_VALUE_INVALID:          "CKR_ATTRIBUTE_VALUE_INVALID",
+	C.CKR_ACTION_PROHIBITED:                "CKR_ACTION_PROHIBITED",
+	C.CKR_DATA_INVALID:                     "CKR_DATA_INVALID",
+	C.CKR_DATA_LEN_RANGE:                   "CKR_DATA_LEN_RANGE",
+	C.CKR_DEVICE_ERROR:                     "CKR_DEVICE_ERROR",
+	C.CKR_DEVICE_MEMORY:                    "CKR_DEVICE_MEMORY",
+	C.CKR_DEVICE_REMOVED:                   "CKR_DEVICE_REMOVED",
+	C.CKR_ENCRYPTED_DATA_INVALID:           "CKR_ENCRYPTED_DATA_INVALID",
+	C.CKR_ENCRYPTED_DATA_LEN_RANGE:         "CKR_ENCRYPTED_DATA_LEN_RANGE",
+	C.CKR_FUNCTION_CANCELED:                "CKR_FUNCTION_CANCELED",
+	C.CKR_FUNCTION_NOT_PARALLEL:            "CKR_FUNCTION_NOT_PARALLEL",
+	C.CKR_FUNCTION_NOT_SUPPORTED:           "CKR_FUNCTION_NOT_SUPPORTED",
+	C.CKR_KEY_HANDLE_INVALID:               "CKR_KEY_HANDLE_INVALID",
+	C.CKR_KEY_SIZE_RANGE:                   "CKR_KEY_SIZE_RANGE",
+	C.CKR_KEY_TYPE_INCONSISTENT:            "CKR_KEY_TYPE_INCONSISTENT",
+	C.CKR_KEY_NOT_NEEDED:                   "CKR_KEY_NOT_NEEDED",
+	C.CKR_KEY_CHANGED:                      "CKR_KEY_CHANGED",
+	C.CKR_KEY_NEEDED:                       "CKR_KEY_NEEDED",
+	C.CKR_KEY_INDIGESTIBLE:                 "CKR_KEY_INDIGESTIBLE",
+	C.CKR_KEY_FUNCTION_NOT_PERMITTED:       "CKR_KEY_FUNCTION_NOT_PERMITTED",
+	C.CKR_KEY_NOT_WRAPPABLE:                "CKR_KEY_NOT_WRAPPABLE",
+	C.CKR_KEY_UNEXTRACTABLE:                "CKR_KEY_UNEXTRACTABLE",
+	C.CKR_MECHANISM_INVALID:                "CKR_MECHANISM_INVALID",
+	C.CKR_MECHANISM_PARAM_INVALID:          "CKR_MECHANISM_PARAM_INVALID",
+	C.CKR_OBJECT_HANDLE_INVALID:            "CKR_OBJECT_HANDLE_INVALID",
+	C.CKR_OPERATION_ACTIVE:                 "CKR_OPERATION_ACTIVE",
+	C.CKR_OPERATION_NOT_INITIALIZED:        "CKR_OPERATION_NOT_INITIALIZED",
+	C.CKR_PIN_INCORRECT:                    "CKR_PIN_INCORRECT",
+	C.CKR_PIN_INVALID:                      "CKR_PIN_INVALID",
+	C.CKR_PIN_LEN_RANGE:                    "CKR_PIN_LEN_RANGE",
+	C.CKR_PIN_EXPIRED:                      "CKR_PIN_EXPIRED",
+	C.CKR_PIN_LOCKED:                       "CKR_PIN_LOCKED",
+	C.CKR_SESSION_CLOSED:                   "CKR_SESSION_CLOSED",
+	C.CKR_SESSION_COUNT:                    "CKR_SESSION_COUNT",
+	C.CKR_SESSION_HANDLE_INVALID:           "CKR_SESSION_HANDLE_INVALID",
+	C.CKR_SESSION_PARALLEL_NOT_SUPPORTED:   "CKR_SESSION_PARALLEL_NOT_SUPPORTED",
+	C.CKR_SESSION_READ_ONLY:                "CKR_SESSION_READ_ONLY",
+	C.CKR_SESSION_EXISTS:                   "CKR_SESSION_EXISTS",
+	C.CKR_SESSION_READ_ONLY_EXISTS:         "CKR_SESSION_READ_ONLY_EXISTS",
+	C.CKR_SESSION_READ_WRITE_SO_EXISTS:     "CKR_SESSION_READ_WRITE_SO_EXISTS",
+	C.CKR_SIGNATURE_INVALID:                "CKR_SIGNATURE_INVALID",
+	C.CKR_SIGNATURE_LEN_RANGE:              "CKR_SIGNATURE_LEN_RANGE",
+	C.CKR_TEMPLATE_INCOMPLETE:              "CKR_TEMPLATE_INCOMPLETE",
+	C.CKR_TEMPLATE_INCONSISTENT:            "CKR_TEMPLATE_INCONSISTENT",
+	C.CKR_TOKEN_NOT_PRESENT:                "CKR_TOKEN_NOT_PRESENT",
+	C.CKR_TOKEN_NOT_RECOGNIZED:             "CKR_TOKEN_NOT_RECOGNIZED",
+	C.CKR_TOKEN_WRITE_PROTECTED:            "CKR_TOKEN_WRITE_PROTECTED",
+	C.CKR_UNWRAPPING_KEY_HANDLE_INVALID:    "CKR_UNWRAPPING_KEY_HANDLE_INVALID",
+	C.CKR_UNWRAPPING_KEY_SIZE_RANGE:        "CKR_UNWRAPPING_KEY_SIZE_RANGE",
+	C.CKR_UNWRAPPING_KEY_TYPE_INCONSISTENT: "CKR_UNWRAPPING_KEY_TYPE_INCONSISTENT",
+	C.CKR_USER_ALREADY_LOGGED_IN:           "CKR_USER_ALREADY_LOGGED_IN",
+	C.CKR_USER_NOT_LOGGED_IN:               "CKR_USER_NOT_LOGGED_IN",
+	C.CKR_USER_PIN_NOT_INITIALIZED:         "CKR_USER_PIN_NOT_INITIALIZED",
+	C.CKR_USER_TYPE_INVALID:                "CKR_USER_TYPE_INVALID",
+	C.CKR_USER_ANOTHER_ALREADY_LOGGED_IN:   "CKR_USER_ANOTHER_ALREADY_LOGGED_IN",
+	C.CKR_USER_TOO_MANY_TYPES:              "CKR_USER_TOO_MANY_TYPES",
+	C.CKR_WRAPPED_KEY_INVALID:              "CKR_WRAPPED_KEY_INVALID",
+	C.CKR_WRAPPED_KEY_LEN_RANGE:            "CKR_WRAPPED_KEY_LEN_RANGE",
+	C.CKR_WRAPPING_KEY_HANDLE_INVALID:      "CKR_WRAPPING_KEY_HANDLE_INVALID",
+	C.CKR_WRAPPING_KEY_SIZE_RANGE:          "CKR_WRAPPING_KEY_SIZE_RANGE",
+	C.CKR_WRAPPING_KEY_TYPE_INCONSISTENT:   "CKR_WRAPPING_KEY_TYPE_INCONSISTENT",
+	C.CKR_RANDOM_SEED_NOT_SUPPORTED:        "CKR_RANDOM_SEED_NOT_SUPPORTED",
+	C.CKR_RANDOM_NO_RNG:                    "CKR_RANDOM_NO_RNG",
+	C.CKR_DOMAIN_PARAMS_INVALID:            "CKR_DOMAIN_PARAMS_INVALID",
+	C.CKR_CURVE_NOT_SUPPORTED:              "CKR_CURVE_NOT_SUPPORTED",
+	C.CKR_BUFFER_TOO_SMALL:                 "CKR_BUFFER_TOO_SMALL",
+	C.CKR_SAVED_STATE_INVALID:              "CKR_SAVED_STATE_INVALID",
+	C.CKR_INFORMATION_SENSITIVE:            "CKR_INFORMATION_SENSITIVE",
+	C.CKR_STATE_UNSAVEABLE:                 "CKR_STATE_UNSAVEABLE",
+	C.CKR_CRYPTOKI_NOT_INITIALIZED:         "CKR_CRYPTOKI_NOT_INITIALIZED",
+	C.CKR_CRYPTOKI_ALREADY_INITIALIZED:     "CKR_CRYPTOKI_ALREADY_INITIALIZED",
+	C.CKR_MUTEX_BAD:                        "CKR_MUTEX_BAD",
+	C.CKR_MUTEX_NOT_LOCKED:                 "CKR_MUTEX_NOT_LOCKED",
+	C.CKR_FUNCTION_REJECTED:                "CKR_FUNCTION_REJECTED",
+	C.CKR_VENDOR_DEFINED:                   "CKR_VENDOR_DEFINED",
 }
 
 func isOk(fnName string, rv C.CK_RV) error {
@@ -957,9 +1052,48 @@ func (o Object) PublicKey() (crypto.PublicKey, error) {
 	switch *kt {
 	case C.CKK_EC:
 		return o.ecdsaPublicKey()
+	case C.CKK_RSA:
+		return o.rsaPublicKey()
 	default:
 		return nil, fmt.Errorf("unsupported key type: 0x%x", *kt)
 	}
+}
+
+func (o Object) rsaPublicKey() (crypto.PublicKey, error) {
+	// http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/cs01/pkcs11-curr-v2.40-cs01.html#_Toc399398838
+	attrs := []C.CK_ATTRIBUTE{
+		{C.CKA_MODULUS, nil, 0},
+		{C.CKA_PUBLIC_EXPONENT, nil, 0},
+	}
+	if err := o.getAttribute(attrs); err != nil {
+		return nil, fmt.Errorf("getting attributes: %w", err)
+	}
+	if attrs[0].ulValueLen == 0 {
+		return nil, fmt.Errorf("no modulus attribute returned")
+	}
+	if attrs[1].ulValueLen == 0 {
+		return nil, fmt.Errorf("no public exponent returned")
+	}
+
+	cN := (C.CK_VOID_PTR)(C.malloc(attrs[0].ulValueLen * C.sizeof_CK_BYTE))
+	defer C.free(unsafe.Pointer(cN))
+	attrs[0].pValue = cN
+
+	cE := (C.CK_VOID_PTR)(C.malloc(attrs[1].ulValueLen))
+	defer C.free(unsafe.Pointer(cE))
+	attrs[1].pValue = cE
+
+	if err := o.getAttribute(attrs); err != nil {
+		return nil, fmt.Errorf("getting attribute values: %w", err)
+	}
+
+	nBytes := C.GoBytes(unsafe.Pointer(cN), C.int(attrs[0].ulValueLen))
+	eBytes := C.GoBytes(unsafe.Pointer(cE), C.int(attrs[1].ulValueLen))
+
+	var n, e big.Int
+	n.SetBytes(nBytes)
+	e.SetBytes(eBytes)
+	return &rsa.PublicKey{N: &n, E: int(e.Int64())}, nil
 }
 
 func (o Object) ecdsaPublicKey() (crypto.PublicKey, error) {
@@ -1047,9 +1181,76 @@ func (o Object) PrivateKey(pub crypto.PublicKey) (crypto.PrivateKey, error) {
 			return nil, fmt.Errorf("expected ecdsa public key, got: %T", pub)
 		}
 		return &ecdsaPrivateKey{o, p}, nil
+	case C.CKK_RSA:
+		p, ok := pub.(*rsa.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf("expected rsa public key, got: %T", pub)
+		}
+		return &rsaPrivateKey{o, p}, nil
 	default:
 		return nil, fmt.Errorf("unsupported key type: 0x%x", *kt)
 	}
+}
+
+// Precomputed ASN1 signature prefixes.
+//
+// Borrowed from crypto/rsa.
+var hashPrefixes = map[crypto.Hash][]byte{
+	crypto.SHA224: {0x30, 0x2d, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x04, 0x05, 0x00, 0x04, 0x1c},
+	crypto.SHA256: {0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20},
+	crypto.SHA384: {0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30},
+	crypto.SHA512: {0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40},
+}
+
+type rsaPrivateKey struct {
+	o   Object
+	pub *rsa.PublicKey
+}
+
+func (r *rsaPrivateKey) Public() crypto.PublicKey {
+	return r.pub
+}
+
+func (r *rsaPrivateKey) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	// http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/cs01/pkcs11-curr-v2.40-cs01.html#_Toc399398842
+	size := opts.HashFunc().Size()
+	if size != len(digest) {
+		return nil, fmt.Errorf("input mush be hashed")
+	}
+	prefix, ok := hashPrefixes[opts.HashFunc()]
+	if !ok {
+		return nil, fmt.Errorf("unsupported hash function: %s", opts.HashFunc())
+	}
+
+	cBytes := make([]C.CK_BYTE, len(prefix)+len(digest))
+	for i, b := range prefix {
+		cBytes[i] = C.CK_BYTE(b)
+	}
+	for i, b := range digest {
+		cBytes[len(prefix)+i] = C.CK_BYTE(b)
+	}
+
+	cSig := make([]C.CK_BYTE, r.pub.Size())
+	cSigLen := C.CK_ULONG(len(cSig))
+
+	m := C.CK_MECHANISM{C.CKM_RSA_PKCS, nil, 0}
+	rv := C.ck_sign_init(r.o.fl, r.o.h, &m, r.o.o)
+	if err := isOk("C_SignInit", rv); err != nil {
+		return nil, err
+	}
+	rv = C.ck_sign(r.o.fl, r.o.h, &cBytes[0], C.CK_ULONG(len(cBytes)), &cSig[0], &cSigLen)
+	if err := isOk("C_Sign", rv); err != nil {
+		return nil, err
+	}
+
+	if int(cSigLen) != len(cSig) {
+		return nil, fmt.Errorf("expected signature of length %d, got %d", len(cSig), cSigLen)
+	}
+	sig := make([]byte, len(cSig))
+	for i, b := range cSig {
+		sig[i] = byte(b)
+	}
+	return sig, nil
 }
 
 type ecdsaPrivateKey struct {
@@ -1208,7 +1409,96 @@ func (s *Slot) generate(opts keyOptions) (crypto.PrivateKey, error) {
 	if opts.ECDSACurve != nil {
 		return s.generateECDSA(opts)
 	}
+	if opts.RSABits != 0 {
+		return s.generateRSA(opts)
+	}
 	return nil, fmt.Errorf("no key parameters provided")
+}
+
+// http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959719
+// http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/os/pkcs11-curr-v2.40-os.html#_Toc416959971
+func (s *Slot) generateRSA(o keyOptions) (crypto.PrivateKey, error) {
+	var (
+		mechanism = C.CK_MECHANISM{
+			mechanism: C.CKM_RSA_PKCS_KEY_PAIR_GEN,
+		}
+		pubH  C.CK_OBJECT_HANDLE
+		privH C.CK_OBJECT_HANDLE
+	)
+
+	cTrue := (C.CK_VOID_PTR)(C.malloc(C.sizeof_CK_BBOOL))
+	cFalse := (C.CK_VOID_PTR)(C.malloc(C.sizeof_CK_BBOOL))
+	defer C.free(unsafe.Pointer(cTrue))
+	defer C.free(unsafe.Pointer(cFalse))
+	*((*C.CK_BBOOL)(cTrue)) = C.CK_TRUE
+	*((*C.CK_BBOOL)(cFalse)) = C.CK_FALSE
+
+	cModBits := (C.CK_VOID_PTR)(C.malloc(C.sizeof_CK_ULONG))
+	defer C.free(unsafe.Pointer(cModBits))
+
+	*((*C.CK_ULONG)(cModBits)) = C.CK_ULONG(o.RSABits)
+
+	privTmpl := []C.CK_ATTRIBUTE{
+		{C.CKA_PRIVATE, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
+		{C.CKA_SENSITIVE, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
+		{C.CKA_SIGN, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
+	}
+
+	if o.LabelPrivate != "" {
+		cs := ckCString(o.LabelPrivate)
+		defer C.free(unsafe.Pointer(cs))
+
+		privTmpl = append(privTmpl, C.CK_ATTRIBUTE{
+			C.CKA_LABEL,
+			C.CK_VOID_PTR(cs),
+			C.CK_ULONG(len(o.LabelPrivate)),
+		})
+	}
+
+	pubTmpl := []C.CK_ATTRIBUTE{
+		{C.CKA_MODULUS_BITS, cModBits, C.CK_ULONG(C.sizeof_CK_ULONG)},
+		{C.CKA_VERIFY, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
+	}
+
+	if o.LabelPublic != "" {
+		cs := ckCString(o.LabelPublic)
+		defer C.free(unsafe.Pointer(cs))
+
+		pubTmpl = append(pubTmpl, C.CK_ATTRIBUTE{
+			C.CKA_LABEL,
+			C.CK_VOID_PTR(cs),
+			C.CK_ULONG(len(o.LabelPublic)),
+		})
+	}
+
+	rv := C.ck_generate_key_pair(
+		s.fl, s.h, &mechanism,
+		&pubTmpl[0], C.CK_ULONG(len(pubTmpl)),
+		&privTmpl[0], C.CK_ULONG(len(privTmpl)),
+		&pubH, &privH,
+	)
+
+	if err := isOk("C_GenerateKeyPair", rv); err != nil {
+		return nil, err
+	}
+
+	pubObj, err := s.newObject(pubH)
+	if err != nil {
+		return nil, fmt.Errorf("public key object: %w", err)
+	}
+	privObj, err := s.newObject(privH)
+	if err != nil {
+		return nil, fmt.Errorf("private key object: %w", err)
+	}
+	pub, err := pubObj.PublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("parsing public key: %w", err)
+	}
+	priv, err := privObj.PrivateKey(pub)
+	if err != nil {
+		return nil, fmt.Errorf("parsing private key: %w", err)
+	}
+	return priv, nil
 }
 
 // https://datatracker.ietf.org/doc/html/rfc5480#section-2.1.1.1
