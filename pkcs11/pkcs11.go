@@ -1212,6 +1212,10 @@ func (r *rsaPrivateKey) Public() crypto.PublicKey {
 }
 
 func (r *rsaPrivateKey) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	if o, ok := opts.(*rsa.PSSOptions); ok {
+		return r.signPSS(digest, o)
+	}
+
 	// http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/cs01/pkcs11-curr-v2.40-cs01.html#_Toc399398842
 	size := opts.HashFunc().Size()
 	if size != len(digest) {
@@ -1234,6 +1238,70 @@ func (r *rsaPrivateKey) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts)
 	cSigLen := C.CK_ULONG(len(cSig))
 
 	m := C.CK_MECHANISM{C.CKM_RSA_PKCS, nil, 0}
+	rv := C.ck_sign_init(r.o.fl, r.o.h, &m, r.o.o)
+	if err := isOk("C_SignInit", rv); err != nil {
+		return nil, err
+	}
+	rv = C.ck_sign(r.o.fl, r.o.h, &cBytes[0], C.CK_ULONG(len(cBytes)), &cSig[0], &cSigLen)
+	if err := isOk("C_Sign", rv); err != nil {
+		return nil, err
+	}
+
+	if int(cSigLen) != len(cSig) {
+		return nil, fmt.Errorf("expected signature of length %d, got %d", len(cSig), cSigLen)
+	}
+	sig := make([]byte, len(cSig))
+	for i, b := range cSig {
+		sig[i] = byte(b)
+	}
+	return sig, nil
+}
+
+func (r *rsaPrivateKey) signPSS(digest []byte, opts *rsa.PSSOptions) ([]byte, error) {
+	// http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/cs01/pkcs11-curr-v2.40-cs01.html#_Toc399398846
+	// http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/cs01/pkcs11-curr-v2.40-cs01.html#_Toc399398845
+	cParam := (C.CK_RSA_PKCS_PSS_PARAMS_PTR)(C.malloc(C.sizeof_CK_RSA_PKCS_PSS_PARAMS))
+	defer C.free(unsafe.Pointer(cParam))
+
+	switch opts.Hash {
+	case crypto.SHA256:
+		cParam.hashAlg = C.CKM_SHA256
+		cParam.mgf = C.CKG_MGF1_SHA256
+	case crypto.SHA384:
+		cParam.hashAlg = C.CKM_SHA384
+		cParam.mgf = C.CKG_MGF1_SHA384
+	case crypto.SHA512:
+		cParam.hashAlg = C.CKM_SHA512
+		cParam.mgf = C.CKG_MGF1_SHA512
+	default:
+		return nil, fmt.Errorf("unsupported hash algorithm: %s", opts.Hash)
+	}
+
+	switch opts.SaltLength {
+	case rsa.PSSSaltLengthAuto:
+		// Same logic as crypto/rsa.
+		l := (r.pub.N.BitLen()-1+7)/8 - 2 - opts.Hash.Size()
+		cParam.sLen = C.CK_ULONG(l)
+	case rsa.PSSSaltLengthEqualsHash:
+		cParam.sLen = C.CK_ULONG(opts.Hash.Size())
+	default:
+		cParam.sLen = C.CK_ULONG(opts.SaltLength)
+	}
+
+	cBytes := make([]C.CK_BYTE, len(digest))
+	for i, b := range digest {
+		cBytes[i] = C.CK_BYTE(b)
+	}
+
+	cSig := make([]C.CK_BYTE, r.pub.Size())
+	cSigLen := C.CK_ULONG(len(cSig))
+
+	m := C.CK_MECHANISM{
+		mechanism:      C.CKM_RSA_PKCS_PSS,
+		pParameter:     C.CK_VOID_PTR(cParam),
+		ulParameterLen: C.CK_ULONG(C.sizeof_CK_RSA_PKCS_PSS_PARAMS),
+	}
+
 	rv := C.ck_sign_init(r.o.fl, r.o.h, &m, r.o.o)
 	if err := isOk("C_SignInit", rv); err != nil {
 		return nil, err
