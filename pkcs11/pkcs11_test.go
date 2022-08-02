@@ -417,6 +417,51 @@ func TestRSAPrivateKey(t *testing.T) {
 	}
 }
 
+func TestRSAPrivateKeyPSS(t *testing.T) {
+	tests := []struct {
+		name string
+		bits int
+	}{
+		{"2048", 2048},
+		{"4096", 4096},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := newTestSlot(t)
+
+			o := keyOptions{RSABits: test.bits}
+			priv, err := s.generate(o)
+			if err != nil {
+				t.Fatalf("generate(%#v) failed: %v", o, err)
+			}
+			signer, ok := priv.(crypto.Signer)
+			if !ok {
+				t.Fatalf("generate() key is unexpected type, got %T, want crypto.Signer", priv)
+			}
+			pub, ok := signer.Public().(*rsa.PublicKey)
+			if !ok {
+				t.Fatalf("Public() key is unexpected type, got %T, want *rsa.PublicKey", pub)
+			}
+
+			h := sha256.New()
+			h.Write([]byte("test"))
+			digest := h.Sum(nil)
+			opts := &rsa.PSSOptions{
+				Hash: crypto.SHA256,
+			}
+
+			sig, err := signer.Sign(rand.Reader, digest, opts)
+			if err != nil {
+				t.Fatalf("Sign() failed: %v", err)
+			}
+			if err := rsa.VerifyPSS(pub, crypto.SHA256, digest, sig, opts); err != nil {
+				t.Errorf("Signature failed to verify: %v", err)
+			}
+		})
+	}
+}
+
 func TestObjects(t *testing.T) {
 	tests := []struct {
 		name string
