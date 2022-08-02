@@ -20,6 +20,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
@@ -291,6 +292,46 @@ func TestECDSAPublicKey(t *testing.T) {
 	}
 }
 
+func TestRSAPublicKey(t *testing.T) {
+	tests := []struct {
+		name string
+		bits int
+	}{
+		{"2048", 2048},
+		{"4096", 4096},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := newTestSlot(t)
+
+			o := keyOptions{RSABits: test.bits}
+			if _, err := s.generate(o); err != nil {
+				t.Fatalf("generate(%#v) failed: %v", o, err)
+			}
+			objs, err := s.Objects(Filter{Class: ClassPublicKey})
+			if err != nil {
+				t.Fatalf("Objects(): %v", err)
+			}
+			if len(objs) != 1 {
+				t.Fatalf("Objects() returned an unexpected number of objects, got %d, want 1", len(objs))
+			}
+			obj := objs[0]
+			pub, err := obj.PublicKey()
+			if err != nil {
+				t.Fatalf("PublicKey(): %v", err)
+			}
+			rsaPub, ok := pub.(*rsa.PublicKey)
+			if !ok {
+				t.Fatalf("PublicKey() unexpected type, got %T, want *rsa.PublicKey", pub)
+			}
+			if got := rsaPub.Size() * 8; got != test.bits {
+				t.Errorf("Generate returned public key with size %d, want %d", got, test.bits)
+			}
+		})
+	}
+}
+
 func TestECDSAPrivateKey(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -329,6 +370,48 @@ func TestECDSAPrivateKey(t *testing.T) {
 			}
 			if !ecdsa.VerifyASN1(pub, digest, sig) {
 				t.Errorf("Signature failed to verify")
+			}
+		})
+	}
+}
+
+func TestRSAPrivateKey(t *testing.T) {
+	tests := []struct {
+		name string
+		bits int
+	}{
+		{"2048", 2048},
+		{"4096", 4096},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := newTestSlot(t)
+
+			o := keyOptions{RSABits: test.bits}
+			priv, err := s.generate(o)
+			if err != nil {
+				t.Fatalf("generate(%#v) failed: %v", o, err)
+			}
+			signer, ok := priv.(crypto.Signer)
+			if !ok {
+				t.Fatalf("generate() key is unexpected type, got %T, want crypto.Signer", priv)
+			}
+			pub, ok := signer.Public().(*rsa.PublicKey)
+			if !ok {
+				t.Fatalf("Public() key is unexpected type, got %T, want *rsa.PublicKey", pub)
+			}
+
+			h := sha256.New()
+			h.Write([]byte("test"))
+			digest := h.Sum(nil)
+
+			sig, err := signer.Sign(rand.Reader, digest, crypto.SHA256)
+			if err != nil {
+				t.Fatalf("Sign() failed: %v", err)
+			}
+			if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest, sig); err != nil {
+				t.Errorf("Signature failed to verify: %v", err)
 			}
 		})
 	}
