@@ -110,16 +110,16 @@ directories.tokendir = %s
 
 func newTestSlot(t *testing.T) *Slot {
 	m := newTestModule(t)
-	opts := SlotOptions{
+	opts := slotOptions{
 		AdminPIN: testAdminPIN,
 		PIN:      testPIN,
 		Label:    testLabel,
 	}
-	if err := m.CreateSlot(0, opts); err != nil {
-		t.Fatalf("CreateSlot(0, %v): %v", opts, err)
+	if err := m.createSlot(0, opts); err != nil {
+		t.Fatalf("createSlot(0, %v): %v", opts, err)
 	}
 
-	s, err := m.Slot(0, SessionOptions{PIN: testPIN, ReadWrite: true})
+	s, err := m.Slot(0, Options{PIN: testPIN, ReadWrite: true})
 	if err != nil {
 		t.Fatalf("Slot(0): %v", err)
 	}
@@ -137,13 +137,13 @@ func TestNewModule(t *testing.T) {
 
 func TestSlotInit(t *testing.T) {
 	m := newTestModule(t)
-	opts := SlotOptions{
+	opts := slotOptions{
 		AdminPIN: testAdminPIN,
 		PIN:      testPIN,
 		Label:    testLabel,
 	}
-	if err := m.CreateSlot(0, opts); err != nil {
-		t.Fatalf("CreateSlot(0, %v): %v", opts, err)
+	if err := m.createSlot(0, opts); err != nil {
+		t.Fatalf("createSlot(0, %v): %v", opts, err)
 	}
 }
 
@@ -173,13 +173,13 @@ func TestInfo(t *testing.T) {
 
 func TestSlotInfo(t *testing.T) {
 	m := newTestModule(t)
-	opts := SlotOptions{
+	opts := slotOptions{
 		AdminPIN: testAdminPIN,
 		PIN:      testPIN,
 		Label:    testLabel,
 	}
-	if err := m.CreateSlot(0, opts); err != nil {
-		t.Fatalf("CreateSlot(0, %v): %v", opts, err)
+	if err := m.createSlot(0, opts); err != nil {
+		t.Fatalf("createSlot(0, %v): %v", opts, err)
 	}
 
 	info, err := m.SlotInfo(0)
@@ -195,23 +195,23 @@ func TestSlotInfo(t *testing.T) {
 func TestSlot(t *testing.T) {
 	tests := []struct {
 		name string
-		opts SessionOptions
+		opts Options
 	}{
-		{"Default", SessionOptions{}},
-		{"RWSession", SessionOptions{ReadWrite: true}},
-		{"PIN", SessionOptions{PIN: testPIN}},
-		{"AdminPIN", SessionOptions{ReadWrite: true, AdminPIN: testAdminPIN}},
+		{"Default", Options{}},
+		{"RWSession", Options{ReadWrite: true}},
+		{"PIN", Options{PIN: testPIN}},
+		{"AdminPIN", Options{ReadWrite: true, AdminPIN: testAdminPIN}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			m := newTestModule(t)
-			opts := SlotOptions{
+			opts := slotOptions{
 				AdminPIN: testAdminPIN,
 				PIN:      testPIN,
 				Label:    testLabel,
 			}
-			if err := m.CreateSlot(0, opts); err != nil {
-				t.Fatalf("CreateSlot(0, %v): %v", opts, err)
+			if err := m.createSlot(0, opts); err != nil {
+				t.Fatalf("createSlot(0, %v): %v", opts, err)
 			}
 
 			s, err := m.Slot(0, test.opts)
@@ -239,9 +239,9 @@ func TestGenerateECDSA(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			s := newTestSlot(t)
 
-			o := KeyOptions{ECDSACurve: test.curve}
-			if _, err := s.Generate(o); err != nil {
-				t.Fatalf("Generate(%#v) failed: %v", o, err)
+			o := keyOptions{ECDSACurve: test.curve}
+			if _, err := s.generate(o); err != nil {
+				t.Fatalf("generate(%#v) failed: %v", o, err)
 			}
 		})
 	}
@@ -261,11 +261,11 @@ func TestECDSAPublicKey(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			s := newTestSlot(t)
 
-			o := KeyOptions{ECDSACurve: test.curve}
-			if _, err := s.Generate(o); err != nil {
-				t.Fatalf("Generate(%#v) failed: %v", o, err)
+			o := keyOptions{ECDSACurve: test.curve}
+			if _, err := s.generate(o); err != nil {
+				t.Fatalf("generate(%#v) failed: %v", o, err)
 			}
-			objs, err := s.Objects(ObjectOptions{Class: ClassPublicKey})
+			objs, err := s.Objects(Filter{Class: ClassPublicKey})
 			if err != nil {
 				t.Fatalf("Objects(): %v", err)
 			}
@@ -298,14 +298,14 @@ func TestECDSAPrivateKey(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			s := newTestSlot(t)
 
-			o := KeyOptions{ECDSACurve: test.curve}
-			priv, err := s.Generate(o)
+			o := keyOptions{ECDSACurve: test.curve}
+			priv, err := s.generate(o)
 			if err != nil {
-				t.Fatalf("Generate(%#v) failed: %v", o, err)
+				t.Fatalf("generate(%#v) failed: %v", o, err)
 			}
 			signer, ok := priv.(crypto.Signer)
 			if !ok {
-				t.Fatalf("Generate() key is unexpected type, got %T, want crypto.Signer", priv)
+				t.Fatalf("generate() key is unexpected type, got %T, want crypto.Signer", priv)
 			}
 			pub, ok := signer.Public().(*ecdsa.PublicKey)
 			if !ok {
@@ -330,24 +330,24 @@ func TestECDSAPrivateKey(t *testing.T) {
 func TestObjects(t *testing.T) {
 	tests := []struct {
 		name string
-		opts ObjectOptions
-		want []ObjectClass
+		opts Filter
+		want []Class
 	}{
-		{"AllObjects", ObjectOptions{}, []ObjectClass{ClassPublicKey, ClassPrivateKey}},
-		{"PrivateKey", ObjectOptions{Class: ClassPrivateKey}, []ObjectClass{ClassPrivateKey}},
-		{"PublicKey", ObjectOptions{Class: ClassPublicKey}, []ObjectClass{ClassPublicKey}},
-		{"ByLabel", ObjectOptions{Label: "privatekey"}, []ObjectClass{ClassPrivateKey}},
+		{"AllObjects", Filter{}, []Class{ClassPublicKey, ClassPrivateKey}},
+		{"PrivateKey", Filter{Class: ClassPrivateKey}, []Class{ClassPrivateKey}},
+		{"PublicKey", Filter{Class: ClassPublicKey}, []Class{ClassPublicKey}},
+		{"ByLabel", Filter{Label: "privatekey"}, []Class{ClassPrivateKey}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			s := newTestSlot(t)
 
-			o := KeyOptions{
+			o := keyOptions{
 				ECDSACurve:   elliptic.P256(),
 				LabelPrivate: "privatekey",
 			}
-			if _, err := s.Generate(o); err != nil {
-				t.Fatalf("Generate(%#v) failed: %v", o, err)
+			if _, err := s.generate(o); err != nil {
+				t.Fatalf("generate(%#v) failed: %v", o, err)
 			}
 
 			objs, err := s.Objects(test.opts)
@@ -355,7 +355,7 @@ func TestObjects(t *testing.T) {
 				t.Fatalf("Slot(0).Objects(): %v", err)
 			}
 
-			var got []ObjectClass
+			var got []Class
 			for _, o := range objs {
 				got = append(got, o.Class())
 			}
@@ -419,13 +419,13 @@ func TestCreateCertificate(t *testing.T) {
 	cert := mustParseCertificate(testCertData)
 
 	want := "testcert"
-	opt := CreateOptions{
+	opt := createOptions{
 		X509Certificate: cert,
 		Label:           want,
 	}
-	o, err := s.Create(opt)
+	o, err := s.create(opt)
 	if err != nil {
-		t.Fatalf("Create(%v) %v", opt, err)
+		t.Fatalf("create(%v) %v", opt, err)
 	}
 	got, err := o.Label()
 	if err != nil {
@@ -435,8 +435,8 @@ func TestCreateCertificate(t *testing.T) {
 		t.Errorf("Label() did not match, got %s, want %s", got, want)
 	}
 
-	if err := o.SetLabel("bar"); err != nil {
-		t.Fatalf("SetLabel(): %v", err)
+	if err := o.setLabel("bar"); err != nil {
+		t.Fatalf("setLabel(): %v", err)
 	}
 	want = "bar"
 	got, err = o.Label()

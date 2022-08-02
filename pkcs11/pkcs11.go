@@ -13,8 +13,6 @@
 // limitations under the License.
 
 // Package pkcs11 implements logic for using PKCS #11 shared libraries.
-//
-// WARNING: The API exposed by this package is experimental and will change.
 package pkcs11
 
 /*
@@ -397,9 +395,9 @@ func (m *Module) Close() error {
 	return nil
 }
 
-// CreateSlot configures a slot object. Internally this calls C_InitToken and
+// createSlot configures a slot object. Internally this calls C_InitToken and
 // C_InitPIN to set the admin and user PIN on the slot.
-func (m *Module) CreateSlot(id uint32, opts SlotOptions) error {
+func (m *Module) createSlot(id uint32, opts slotOptions) error {
 	if opts.Label == "" {
 		return fmt.Errorf("no label provided")
 	}
@@ -429,7 +427,7 @@ func (m *Module) CreateSlot(id uint32, opts SlotOptions) error {
 		return err
 	}
 
-	so := SessionOptions{
+	so := Options{
 		AdminPIN:  opts.AdminPIN,
 		ReadWrite: true,
 	}
@@ -557,14 +555,14 @@ type Slot struct {
 	h  C.CK_SESSION_HANDLE
 }
 
-type SlotOptions struct {
+type slotOptions struct {
 	AdminPIN string
 	PIN      string
 	Label    string
 }
 
-// SessionOption is a configuration option for the slot session.
-type SessionOptions struct {
+// Options holds configuration options for the slot session.
+type Options struct {
 	PIN      string
 	AdminPIN string
 	// ReadWrite indicates that the slot should be opened with write capabilities,
@@ -578,7 +576,7 @@ type SessionOptions struct {
 // must call Close to release the session.
 //
 // The returned Slot's behavior is undefined once the Module is closed.
-func (m *Module) Slot(id uint32, opts SessionOptions) (*Slot, error) {
+func (m *Module) Slot(id uint32, opts Options) (*Slot, error) {
 	if opts.AdminPIN != "" && opts.PIN != "" {
 		return nil, fmt.Errorf("can't specify pin and admin pin")
 	}
@@ -659,38 +657,38 @@ func (s *Slot) loginAdmin(adminPIN string) error {
 	return isOk("C_Login", C.ck_login(s.fl, s.h, C.CKU_SO, &cPIN[0], cPINLen))
 }
 
-type ObjectClass int
+// Class is the primary object type. Such as a certificate, public key, or
+// private key.
+type Class int
 
+// Set of classes supported by this package.
 const (
-	ClassData ObjectClass = iota + 1
-	ClassCertificate
-	ClassPrivateKey
-	ClassPublicKey
-	ClassSecretKey
-	ClassDomainParameters
-	UnknownClass
+	ClassData             Class = 0x00000000
+	ClassCertificate      Class = 0x00000001
+	ClassPublicKey        Class = 0x00000002
+	ClassPrivateKey       Class = 0x00000003
+	ClassSecretKey        Class = 0x00000004
+	ClassDomainParameters Class = 0x00000006
 )
 
-func (c ObjectClass) String() string {
-	switch c {
-	case ClassData:
-		return "data"
-	case ClassCertificate:
-		return "certificate"
-	case ClassPublicKey:
-		return "public key"
-	case ClassPrivateKey:
-		return "private key"
-	case ClassSecretKey:
-		return "secret key"
-	case ClassDomainParameters:
-		return "domain parameters"
-	}
-	return "unknown object class"
-
+var classString = map[Class]string{
+	ClassData:             "CKO_DATA",
+	ClassCertificate:      "CKO_CERTIFICATE",
+	ClassPublicKey:        "CKO_PUBLIC_KEY",
+	ClassPrivateKey:       "CKO_PRIVATE_KEY",
+	ClassSecretKey:        "CKO_SECRET_KEY",
+	ClassDomainParameters: "CKO_DOMAIN_PARAMETERS",
 }
 
-func (c ObjectClass) ckType() (C.CK_OBJECT_CLASS, bool) {
+// String returns a human readable version of the object class.
+func (c Class) String() string {
+	if s, ok := classString[c]; ok {
+		return s
+	}
+	return fmt.Sprintf("Class(0x%08x)", int(c))
+}
+
+func (c Class) ckType() (C.CK_OBJECT_CLASS, bool) {
 	switch c {
 	case ClassData:
 		return C.CKO_DATA, true
@@ -722,13 +720,13 @@ func (s *Slot) newObject(o C.CK_OBJECT_HANDLE) (Object, error) {
 	return Object{s.fl, s.h, o, *objClass}, nil
 }
 
-type CreateOptions struct {
+type createOptions struct {
 	Label string
 
 	X509Certificate *x509.Certificate
 }
 
-func (s *Slot) Create(opts CreateOptions) (*Object, error) {
+func (s *Slot) create(opts createOptions) (*Object, error) {
 	if opts.X509Certificate != nil {
 		return s.createX509Certificate(opts)
 	}
@@ -736,7 +734,7 @@ func (s *Slot) Create(opts CreateOptions) (*Object, error) {
 }
 
 // http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959709
-func (s *Slot) createX509Certificate(opts CreateOptions) (*Object, error) {
+func (s *Slot) createX509Certificate(opts createOptions) (*Object, error) {
 	if opts.X509Certificate == nil {
 		return nil, fmt.Errorf("no certificate provided")
 	}
@@ -784,8 +782,13 @@ func (s *Slot) createX509Certificate(opts CreateOptions) (*Object, error) {
 	return &obj, nil
 }
 
-type ObjectOptions struct {
-	Class ObjectClass
+// Filter hold options for returning a subset of objects from a slot.
+//
+// The returned object will match all provided parameters. For example, if
+// Class=ClassPrivateKey and Label="foo", the returned object must be a
+// private key with label "foo".
+type Filter struct {
+	Class Class
 	Label string
 }
 
@@ -793,7 +796,7 @@ type ObjectOptions struct {
 // objects if no options are provided.
 //
 // The returned objects behavior is undefined once the Slot object is closed.
-func (s *Slot) Objects(opts ObjectOptions) ([]Object, error) {
+func (s *Slot) Objects(opts Filter) ([]Object, error) {
 	var attrs []C.CK_ATTRIBUTE
 	if opts.Label != "" {
 		cs := ckCString(opts.Label)
@@ -807,7 +810,7 @@ func (s *Slot) Objects(opts ObjectOptions) ([]Object, error) {
 	}
 
 	if opts.Class != 0 {
-		c, ok := ObjectClass(opts.Class).ckType()
+		c, ok := Class(opts.Class).ckType()
 		if ok {
 			objClass := C.CK_OBJECT_CLASS_PTR(C.malloc(C.sizeof_CK_OBJECT_CLASS))
 			defer C.free(unsafe.Pointer(objClass))
@@ -860,6 +863,8 @@ func (s *Slot) Objects(opts ObjectOptions) ([]Object, error) {
 	return objs, nil
 }
 
+// Object represents a single object stored within a slot. For example a key or
+// certificate.
 type Object struct {
 	fl C.CK_FUNCTION_LIST_PTR
 	h  C.CK_SESSION_HANDLE
@@ -867,23 +872,10 @@ type Object struct {
 	c  C.CK_OBJECT_CLASS
 }
 
-func (o Object) Class() ObjectClass {
-	switch o.c {
-	case C.CKO_DATA:
-		return ClassData
-	case C.CKO_CERTIFICATE:
-		return ClassCertificate
-	case C.CKO_PUBLIC_KEY:
-		return ClassPublicKey
-	case C.CKO_PRIVATE_KEY:
-		return ClassPrivateKey
-	case C.CKO_SECRET_KEY:
-		return ClassSecretKey
-	case C.CKO_DOMAIN_PARAMETERS:
-		return ClassDomainParameters
-	default:
-		return UnknownClass
-	}
+// Class returns the type of the object stored. For example, certificate, public
+// key, or private key.
+func (o Object) Class() Class {
+	return Class(int(o.c))
 }
 
 func (o Object) getAttribute(attrs []C.CK_ATTRIBUTE) error {
@@ -898,7 +890,8 @@ func (o Object) setAttribute(attrs []C.CK_ATTRIBUTE) error {
 	)
 }
 
-// Label returns the label of an object.
+// Label returns a string value attached to an object, which can be used to
+// identify or group sets of keys and certificates.
 func (o Object) Label() (string, error) {
 	attrs := []C.CK_ATTRIBUTE{{C.CKA_LABEL, nil, 0}}
 	if err := o.getAttribute(attrs); err != nil {
@@ -916,8 +909,8 @@ func (o Object) Label() (string, error) {
 	return ckGoString(cLabel, n), nil
 }
 
-// SetLabel sets the label of the object overwriting any previous value.
-func (o Object) SetLabel(s string) error {
+// setLabel sets the label of the object overwriting any previous value.
+func (o Object) setLabel(s string) error {
 	cs := ckCString(s)
 	defer C.free(unsafe.Pointer(cs))
 
@@ -925,6 +918,8 @@ func (o Object) SetLabel(s string) error {
 	return o.setAttribute(attrs)
 }
 
+// Certificate parses the underlying object as a certificate. If the object
+// isn't a certificate, this method fails.
 func (o Object) Certificate() (*Certificate, error) {
 	if o.Class() != ClassCertificate {
 		return nil, fmt.Errorf("object has class: %s", o.Class())
@@ -941,6 +936,10 @@ func (o Object) Certificate() (*Certificate, error) {
 	return &Certificate{o, *ct}, nil
 }
 
+// PublicKey parses the underlying object as a public key. Both RSA and ECDSA
+// keys are supported.
+//
+// If the object isn't a public key, this method fails.
 func (o Object) PublicKey() (crypto.PublicKey, error) {
 	if o.Class() != ClassPublicKey {
 		return nil, fmt.Errorf("object has class: %s", o.Class())
@@ -1020,6 +1019,13 @@ func (o Object) ecdsaPublicKey() (crypto.PublicKey, error) {
 	}, nil
 }
 
+// PrivateKey parses the underlying object as a private key. Both RSA and ECDSA
+// keys are supported.
+//
+// The returned PrivateKey implements crypto.Signer and optionally crypto.Decrypter
+// depending on the supported mechanisms.
+//
+// If the object isn't a public key, this method fails.
 func (o Object) PrivateKey(pub crypto.PublicKey) (crypto.PrivateKey, error) {
 	if o.Class() != ClassPrivateKey {
 		return nil, fmt.Errorf("object has class: %s", o.Class())
@@ -1177,8 +1183,8 @@ func (c *Certificate) X509() (*x509.Certificate, error) {
 	return cert, nil
 }
 
-// KeyOptions holds parameters used for generating a private key.
-type KeyOptions struct {
+// keyOptions holds parameters used for generating a private key.
+type keyOptions struct {
 	// RSABits indicates that the generated key should be a RSA key and also
 	// provides the number of bits.
 	RSABits int
@@ -1195,7 +1201,7 @@ type KeyOptions struct {
 
 // Generate a private key on the slot, creating associated private and public
 // key objects.
-func (s *Slot) Generate(opts KeyOptions) (crypto.PrivateKey, error) {
+func (s *Slot) generate(opts keyOptions) (crypto.PrivateKey, error) {
 	if opts.ECDSACurve != nil && opts.RSABits != 0 {
 		return nil, fmt.Errorf("conflicting key parameters provided")
 	}
@@ -1219,7 +1225,7 @@ var (
 // http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959719
 // https://datatracker.ietf.org/doc/html/rfc5480#section-2.1.1.1
 // http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/os/pkcs11-curr-v2.40-os.html#_Toc416960014
-func (s *Slot) generateECDSA(o KeyOptions) (crypto.PrivateKey, error) {
+func (s *Slot) generateECDSA(o keyOptions) (crypto.PrivateKey, error) {
 	var (
 		mechanism = C.CK_MECHANISM{
 			mechanism: C.CKM_EC_KEY_PAIR_GEN,
