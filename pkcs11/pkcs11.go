@@ -891,7 +891,7 @@ type Filter struct {
 // objects if no options are provided.
 //
 // The returned objects behavior is undefined once the Slot object is closed.
-func (s *Slot) Objects(opts Filter) ([]Object, error) {
+func (s *Slot) Objects(opts Filter) (objs []Object, err error) {
 	var attrs []C.CK_ATTRIBUTE
 	if opts.Label != "" {
 		cs := ckCString(opts.Label)
@@ -928,6 +928,12 @@ func (s *Slot) Objects(opts Filter) ([]Object, error) {
 	if err := isOk("C_FindObjectsInit", rv); err != nil {
 		return nil, err
 	}
+	defer func() {
+		rv := C.ck_find_objects_final(s.fl, s.h)
+		if ferr := isOk("C_FindObjectsFinal", rv); ferr != nil && err == nil {
+			err = ferr
+		}
+	}()
 
 	var handles []C.CK_OBJECT_HANDLE
 	const objectsAtATime = 16
@@ -947,7 +953,6 @@ func (s *Slot) Objects(opts Filter) ([]Object, error) {
 		handles = append(handles, cObjHandles[:int(n)]...)
 	}
 
-	var objs []Object
 	for _, h := range handles {
 		o, err := s.newObject(h)
 		if err != nil {
