@@ -279,13 +279,15 @@ func ckString(s string) []C.CK_UTF8CHAR {
 // ckCString converts a Go string to a cryptokit string held by C. This is required,
 // for example, when building a CK_ATTRIBUTE, which needs to hold a pointer to a
 // cryptokit string.
-func ckCString(s string) *C.CK_UTF8CHAR {
+//
+// This method also returns a function to free the allocated C memory.
+func ckCString(s string) (cstring *C.CK_UTF8CHAR, free func()) {
 	b := (*C.CK_UTF8CHAR)(C.malloc(C.sizeof_CK_UTF8CHAR * C.ulong(len(s))))
 	bs := unsafe.Slice(b, len(s))
 	for i, c := range []byte(s) {
 		bs[i] = C.CK_UTF8CHAR(c)
 	}
-	return b
+	return b, func() { C.free(unsafe.Pointer(b)) }
 }
 
 func ckGoString(s *C.CK_UTF8CHAR, n C.CK_ULONG) string {
@@ -855,8 +857,8 @@ func (s *Slot) createX509Certificate(opts createOptions) (*Object, error) {
 	}
 
 	if opts.Label != "" {
-		cs := ckCString(opts.Label)
-		defer C.free(unsafe.Pointer(cs))
+		cs, free := ckCString(opts.Label)
+		defer free()
 
 		attrs = append(attrs, C.CK_ATTRIBUTE{
 			C.CKA_LABEL,
@@ -894,8 +896,8 @@ type Filter struct {
 func (s *Slot) Objects(opts Filter) (objs []Object, err error) {
 	var attrs []C.CK_ATTRIBUTE
 	if opts.Label != "" {
-		cs := ckCString(opts.Label)
-		defer C.free(unsafe.Pointer(cs))
+		cs, free := ckCString(opts.Label)
+		defer free()
 
 		attrs = append(attrs, C.CK_ATTRIBUTE{
 			C.CKA_LABEL,
@@ -1011,8 +1013,8 @@ func (o Object) Label() (string, error) {
 
 // setLabel sets the label of the object overwriting any previous value.
 func (o Object) setLabel(s string) error {
-	cs := ckCString(s)
-	defer C.free(unsafe.Pointer(cs))
+	cs, free := ckCString(s)
+	defer free()
 
 	attrs := []C.CK_ATTRIBUTE{{C.CKA_LABEL, C.CK_VOID_PTR(cs), C.CK_ULONG(len(s))}}
 	return o.setAttribute(attrs)
@@ -1518,8 +1520,8 @@ func (s *Slot) generateRSA(o keyOptions) (crypto.PrivateKey, error) {
 	}
 
 	if o.LabelPrivate != "" {
-		cs := ckCString(o.LabelPrivate)
-		defer C.free(unsafe.Pointer(cs))
+		cs, free := ckCString(o.LabelPrivate)
+		defer free()
 
 		privTmpl = append(privTmpl, C.CK_ATTRIBUTE{
 			C.CKA_LABEL,
@@ -1534,8 +1536,8 @@ func (s *Slot) generateRSA(o keyOptions) (crypto.PrivateKey, error) {
 	}
 
 	if o.LabelPublic != "" {
-		cs := ckCString(o.LabelPublic)
-		defer C.free(unsafe.Pointer(cs))
+		cs, free := ckCString(o.LabelPublic)
+		defer free()
 
 		pubTmpl = append(pubTmpl, C.CK_ATTRIBUTE{
 			C.CKA_LABEL,
@@ -1632,8 +1634,8 @@ func (s *Slot) generateECDSA(o keyOptions) (crypto.PrivateKey, error) {
 	}
 
 	if o.LabelPrivate != "" {
-		cs := ckCString(o.LabelPrivate)
-		defer C.free(unsafe.Pointer(cs))
+		cs, free := ckCString(o.LabelPrivate)
+		defer free()
 
 		privTmpl = append(privTmpl, C.CK_ATTRIBUTE{
 			C.CKA_LABEL,
@@ -1647,8 +1649,8 @@ func (s *Slot) generateECDSA(o keyOptions) (crypto.PrivateKey, error) {
 		{C.CKA_VERIFY, cTrue, C.CK_ULONG(C.sizeof_CK_BBOOL)},
 	}
 	if o.LabelPublic != "" {
-		cs := ckCString(o.LabelPublic)
-		defer C.free(unsafe.Pointer(cs))
+		cs, free := ckCString(o.LabelPublic)
+		defer free()
 
 		pubTmpl = append(pubTmpl, C.CK_ATTRIBUTE{
 			C.CKA_LABEL,
