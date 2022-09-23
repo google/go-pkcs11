@@ -1397,15 +1397,14 @@ const (
 // various kinds of certificates, callers should check the type before calling
 // methods that parse the certificate.
 //
-// 		cert, err := obj.Certificate()
-//		if err != nil {
-//			// ...
-//		}
-//		if cert.Type() != pkcs11.CertificateX509 {
-//			// unexpected kind of certificate ...
-//		}
-//		x509Cert, err := cert.X509()
-//
+//	cert, err := obj.Certificate()
+//	if err != nil {
+//		// ...
+//	}
+//	if cert.Type() != pkcs11.CertificateX509 {
+//		// unexpected kind of certificate ...
+//	}
+//	x509Cert, err := cert.X509()
 type Certificate struct {
 	o Object
 	t C.CK_CERTIFICATE_TYPE
