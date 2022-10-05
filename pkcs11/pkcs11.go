@@ -543,7 +543,7 @@ func (m *Module) createSlot(id uint32, opts slotOptions) error {
 }
 
 // SlotIDs returns the IDs of all slots associated with this module, including
-// ones that haven't been initalized.
+// ones that haven't been initialized.
 func (m *Module) SlotIDs() ([]uint32, error) {
 	var n C.CK_ULONG
 	rv := C.ck_get_slot_list(m.fl, nil, &n)
@@ -1113,7 +1113,7 @@ func (o Object) ecdsaPublicKey() (crypto.PublicKey, error) {
 		return nil, fmt.Errorf("getting attributes: %w", err)
 	}
 	if attrs[0].ulValueLen == 0 {
-		return nil, fmt.Errorf("no ec paramaters available")
+		return nil, fmt.Errorf("no ec parameters available")
 	}
 	if attrs[1].ulValueLen == 0 {
 		return nil, fmt.Errorf("no ec point available")
