@@ -232,6 +232,46 @@ CK_RV ck_sign(
 ) {
 	return (*fl->C_Sign)(hSession, pData, ulDataLen, pSignature, pulSignatureLen);
 }
+
+CK_RV ck_encrypt_init(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,  
+	CK_MECHANISM_PTR  pMechanism,
+	CK_OBJECT_HANDLE  hKey      
+) {
+	return (*fl->C_EncryptInit)(hSession, pMechanism, hKey);
+}
+
+CK_RV ck_encrypt(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_BYTE_PTR       pData,  
+	CK_ULONG          ulDataLen,
+	CK_BYTE_PTR       pEncryptedData,
+	CK_ULONG_PTR      pulEncryptedDataLen
+) {
+	return (*fl->C_Encrypt)(hSession, pData,  ulDataLen, pEncryptedData, pulEncryptedDataLen);
+}
+
+CK_RV ck_decrypt_init(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,  
+	CK_MECHANISM_PTR  pMechanism,
+	CK_OBJECT_HANDLE  hKey      
+) {
+	return (*fl->C_DecryptInit)(hSession, pMechanism, hKey);
+}
+
+CK_RV ck_decrypt(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_BYTE_PTR       pEncryptedData,
+	CK_ULONG          ulEncryptedDataLen,
+	CK_BYTE_PTR       pData,
+	CK_ULONG_PTR      pulDataLen
+) {
+	return (*fl->C_Decrypt)(hSession, pEncryptedData,  ulEncryptedDataLen, pData, pulDataLen);
+}
 */
 // #cgo linux LDFLAGS: -ldl
 import "C"
