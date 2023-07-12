@@ -235,9 +235,9 @@ CK_RV ck_sign(
 
 CK_RV ck_encrypt_init(
 	CK_FUNCTION_LIST_PTR fl,
-	CK_SESSION_HANDLE hSession,  
+	CK_SESSION_HANDLE hSession,
 	CK_MECHANISM_PTR  pMechanism,
-	CK_OBJECT_HANDLE  hKey      
+	CK_OBJECT_HANDLE  hKey
 ) {
 	return (*fl->C_EncryptInit)(hSession, pMechanism, hKey);
 }
@@ -245,7 +245,7 @@ CK_RV ck_encrypt_init(
 CK_RV ck_encrypt(
 	CK_FUNCTION_LIST_PTR fl,
 	CK_SESSION_HANDLE hSession,
-	CK_BYTE_PTR       pData,  
+	CK_BYTE_PTR       pData,
 	CK_ULONG          ulDataLen,
 	CK_BYTE_PTR       pEncryptedData,
 	CK_ULONG_PTR      pulEncryptedDataLen
@@ -255,9 +255,9 @@ CK_RV ck_encrypt(
 
 CK_RV ck_decrypt_init(
 	CK_FUNCTION_LIST_PTR fl,
-	CK_SESSION_HANDLE hSession,  
+	CK_SESSION_HANDLE hSession,
 	CK_MECHANISM_PTR  pMechanism,
-	CK_OBJECT_HANDLE  hKey      
+	CK_OBJECT_HANDLE  hKey
 ) {
 	return (*fl->C_DecryptInit)(hSession, pMechanism, hKey);
 }
@@ -1726,4 +1726,58 @@ func (s *Slot) generateECDSA(o keyOptions) (crypto.PrivateKey, error) {
 		return nil, fmt.Errorf("parsing private key: %w", err)
 	}
 	return priv, nil
+}
+
+func (r *rsaPrivateKey)Encrypt() {
+
+}
+
+func (r *rsaPrivateKey)Decrypt() {
+
+}
+
+func (r *rsaPrivateKey) SignExample(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	if o, ok := opts.(*rsa.PSSOptions); ok {
+		return r.signPSS(digest, o)
+	}
+
+	// http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/cs01/pkcs11-curr-v2.40-cs01.html#_Toc399398842
+	size := opts.HashFunc().Size()
+	if size != len(digest) {
+		return nil, fmt.Errorf("input must be hashed")
+	}
+	prefix, ok := hashPrefixes[opts.HashFunc()]
+	if !ok {
+		return nil, fmt.Errorf("unsupported hash function: %s", opts.HashFunc())
+	}
+
+	cBytes := make([]C.CK_BYTE, len(prefix)+len(digest))
+	for i, b := range prefix {
+		cBytes[i] = C.CK_BYTE(b)
+	}
+	for i, b := range digest {
+		cBytes[len(prefix)+i] = C.CK_BYTE(b)
+	}
+
+	cSig := make([]C.CK_BYTE, r.pub.Size())
+	cSigLen := C.CK_ULONG(len(cSig))
+
+	m := C.CK_MECHANISM{C.CKM_RSA_PKCS, nil, 0}
+	rv := C.ck_sign_init(r.o.fl, r.o.h, &m, r.o.o)
+	if err := isOk("C_SignInit", rv); err != nil {
+		return nil, err
+	}
+	rv = C.ck_sign(r.o.fl, r.o.h, &cBytes[0], C.CK_ULONG(len(cBytes)), &cSig[0], &cSigLen)
+	if err := isOk("C_Sign", rv); err != nil {
+		return nil, err
+	}
+
+	if int(cSigLen) != len(cSig) {
+		return nil, fmt.Errorf("expected signature of length %d, got %d", len(cSig), cSigLen)
+	}
+	sig := make([]byte, len(cSig))
+	for i, b := range cSig {
+		sig[i] = byte(b)
+	}
+	return sig, nil
 }
