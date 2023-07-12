@@ -1266,7 +1266,7 @@ func (r *rsaPrivateKey) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts)
 	// http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/cs01/pkcs11-curr-v2.40-cs01.html#_Toc399398842
 	size := opts.HashFunc().Size()
 	if size != len(digest) {
-		return nil, fmt.Errorf("input mush be hashed")
+		return nil, fmt.Errorf("input must be hashed")
 	}
 	prefix, ok := hashPrefixes[opts.HashFunc()]
 	if !ok {
