@@ -281,6 +281,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
 	"fmt"
@@ -1252,6 +1253,7 @@ var hashPrefixes = map[crypto.Hash][]byte{
 type rsaPrivateKey struct {
 	o   Object
 	pub *rsa.PublicKey
+	hash *crypto.Hash
 }
 
 func (r *rsaPrivateKey) Public() crypto.PublicKey {
@@ -1728,8 +1730,21 @@ func (s *Slot) generateECDSA(o keyOptions) (crypto.PrivateKey, error) {
 	return priv, nil
 }
 
+
+func (r *rsaPrivateKey) WithHash(hash crypto.Hash) (*rsaPrivateKey, error) {
+	r.hash = &hash
+	return r, nil
+}
 func (r *rsaPrivateKey) Encrypt(data []byte) ([]byte, error) {
 	// Try to model params based off the sign function.
+	// TODO: Wrap this block in a helper function.
+	var actualHash crypto.Hash
+	if r.hash != nil {
+		actualHash = *r.hash
+	} else {
+		// TODO: Initialize SHA1
+		actualHash = crypto.Hash.New()
+	}
 	return nil, nil
 }
 
