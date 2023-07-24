@@ -1728,12 +1728,13 @@ func (s *Slot) generateECDSA(o keyOptions) (crypto.PrivateKey, error) {
 	return priv, nil
 }
 
-func (r *rsaPrivateKey)Encrypt() {
-
+func (r *rsaPrivateKey) Encrypt(data []byte) ([]byte, error) {
+	// Try to model params based off the sign function.
+	return nil, nil
 }
 
-func (r *rsaPrivateKey)Decrypt() {
-
+func (r *rsaPrivateKey) Decrypt(encryptedData []byte) ([]byte, error)  {
+	return nil, nil
 }
 
 func (r *rsaPrivateKey) SignExample(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
