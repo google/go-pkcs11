@@ -1744,7 +1744,7 @@ func (r *rsaPrivateKey) getHash() *crypto.Hash {
 	return &hash
 }
 
-func (r *rsaPrivateKey) Encrypt(data []byte) ([]byte, error) {
+func (r *rsaPrivateKey) encryptOAEP(data []byte) ([]byte, error) {
 	hash := r.getHash()
 	cParam := (C.CK_RSA_PKCS_OAEP_PARAMS_PTR)(C.malloc(C.sizeof_CK_RSA_PKCS_OAEP_PARAMS))
 	defer C.free(unsafe.Pointer(cParam))
@@ -1802,3 +1802,17 @@ func (r *rsaPrivateKey) Encrypt(data []byte) ([]byte, error) {
 func (r *rsaPrivateKey) Decrypt(encryptedData []byte) ([]byte, error)  {
 	return nil, nil
 }
+
+// func (k crypto.PrivateKey) Encrypt(data []byte) ([]byte, error) {
+// 	kt := (*C.CK_KEY_TYPE)(C.malloc(C.sizeof_CK_KEY_TYPE))
+// 	defer C.free(unsafe.Pointer(kt))
+// 	switch *kt {
+// 	case C.CKK_EC:
+// 		//TODO: call encrypt ec
+// 		return nil, nil
+// 	case C.CKK_RSA:
+// 		return *k.encryptOAEP(data)
+// 	default:
+// 		return nil, fmt.Errorf("unsupported key type: 0x%x", *kt)
+// 	}
+// }

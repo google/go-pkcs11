@@ -595,6 +595,33 @@ func TestCreateCertificate(t *testing.T) {
 	}
 }
 
-func TestEncrypt(t *testing.T) {
-	
+func TestEncryptOAEP(t *testing.T) {
+	msg := "Plain text to encrypt"
+	b := []byte(msg)
+	tests := []struct {
+		name string
+		bits int
+	}{
+		{"2048", 2048},
+		{"4096", 4096},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := newTestSlot(t)
+			o := keyOptions{RSABits: test.bits}
+			priv, err := s.generate(o)
+			if err != nil {
+				t.Fatalf("generate(%#v) failed: %v", o, err)
+			}
+			rsaPriv, ok := priv.(*rsaPrivateKey)
+			if !ok {
+				t.Fatalf("Private Key unexpected type, got %T, want *rsaPrivateKey", priv)
+			}
+			cipher, err := rsaPriv.encryptOAEP(b)
+			if err != nil {
+				t.Errorf("encryptOAEP Error: %v", err)
+				t.Log(cipher)
+			}
+		})
+	}	
 }
