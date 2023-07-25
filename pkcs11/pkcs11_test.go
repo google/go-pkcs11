@@ -594,3 +594,7 @@ func TestCreateCertificate(t *testing.T) {
 		t.Errorf("Returned certificate did not match loaded certificate")
 	}
 }
+
+func TestEncrypt(t *testing.T) {
+	
+}

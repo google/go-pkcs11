@@ -281,7 +281,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
 	"fmt"
@@ -1234,7 +1233,7 @@ func (o Object) PrivateKey(pub crypto.PublicKey) (crypto.PrivateKey, error) {
 		if !ok {
 			return nil, fmt.Errorf("expected rsa public key, got: %T", pub)
 		}
-		return &rsaPrivateKey{o, p}, nil
+		return &rsaPrivateKey{o, p, nil}, nil
 	default:
 		return nil, fmt.Errorf("unsupported key type: 0x%x", *kt)
 	}
@@ -1735,65 +1734,71 @@ func (r *rsaPrivateKey) WithHash(hash crypto.Hash) (*rsaPrivateKey, error) {
 	r.hash = &hash
 	return r, nil
 }
-func (r *rsaPrivateKey) Encrypt(data []byte) ([]byte, error) {
-	// Try to model params based off the sign function.
-	// TODO: Wrap this block in a helper function.
-	var actualHash crypto.Hash
+
+func (r *rsaPrivateKey) getHash() *crypto.Hash {
 	if r.hash != nil {
-		actualHash = *r.hash
-	} else {
-		// TODO: Initialize SHA1
-		actualHash = crypto.Hash.New()
+		return r.hash
+	} 
+	// Initialized to SHA256 if no hash specified
+	hash := crypto.SHA256
+	return &hash
+}
+
+func (r *rsaPrivateKey) Encrypt(data []byte) ([]byte, error) {
+	hash := r.getHash()
+	cParam := (C.CK_RSA_PKCS_OAEP_PARAMS_PTR)(C.malloc(C.sizeof_CK_RSA_PKCS_OAEP_PARAMS))
+	defer C.free(unsafe.Pointer(cParam))
+
+	switch *hash {
+		case crypto.SHA256:
+			cParam.hashAlg = C.CKM_SHA256
+			cParam.mgf = C.CKG_MGF1_SHA256
+		case crypto.SHA384:
+			cParam.hashAlg = C.CKM_SHA384
+			cParam.mgf = C.CKG_MGF1_SHA384
+		case crypto.SHA512:
+			cParam.hashAlg = C.CKM_SHA512
+			cParam.mgf = C.CKG_MGF1_SHA512
+		default:
+			return nil, fmt.Errorf("unsupported hash algorithm: %s", hash)
 	}
-	return nil, nil
+
+	cDataBytes := make([]C.CK_BYTE, len(data))
+	for i, b := range cDataBytes {
+		cDataBytes[i] = C.CK_BYTE(b)
+	}
+
+	cParam.source = C.CKZ_DATA_SPECIFIED
+	cParam.pSourceData = C.CK_VOID_PTR(&cDataBytes)
+	cParam.ulSourceDataLen = C.CK_ULONG(len(cDataBytes))
+
+	m := C.CK_MECHANISM{
+		mechanism:      C.CKM_RSA_PKCS_OAEP,
+		pParameter:     C.CK_VOID_PTR(cParam),
+		ulParameterLen: C.CK_ULONG(C.sizeof_CK_RSA_PKCS_OAEP_PARAMS),
+	}
+
+	rv := C.ck_encrypt_init(r.o.fl, r.o.h, &m, r.o.o)
+	if err := isOk("C_EncryptInit", rv); err != nil {
+		return nil, err
+	}
+
+	cCipher := make([]C.CK_BYTE, r.pub.Size())
+	cCipherLen := C.CK_ULONG(len(cCipher))
+
+	rv = C.ck_encrypt(r.o.fl, r.o.h, &cDataBytes[0], C.CK_ULONG(len(cDataBytes)), &cCipher[0], &cCipherLen)
+	if err := isOk("C_Encrypt", rv); err != nil {
+		return nil, err
+	}
+
+	cipher := make([]byte, len(cCipher))
+	for i, b := range cCipher {
+		cipher[i] = byte(b)
+	}
+
+	return cipher, nil
 }
 
 func (r *rsaPrivateKey) Decrypt(encryptedData []byte) ([]byte, error)  {
 	return nil, nil
-}
-
-func (r *rsaPrivateKey) SignExample(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
-	if o, ok := opts.(*rsa.PSSOptions); ok {
-		return r.signPSS(digest, o)
-	}
-
-	// http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/cs01/pkcs11-curr-v2.40-cs01.html#_Toc399398842
-	size := opts.HashFunc().Size()
-	if size != len(digest) {
-		return nil, fmt.Errorf("input must be hashed")
-	}
-	prefix, ok := hashPrefixes[opts.HashFunc()]
-	if !ok {
-		return nil, fmt.Errorf("unsupported hash function: %s", opts.HashFunc())
-	}
-
-	cBytes := make([]C.CK_BYTE, len(prefix)+len(digest))
-	for i, b := range prefix {
-		cBytes[i] = C.CK_BYTE(b)
-	}
-	for i, b := range digest {
-		cBytes[len(prefix)+i] = C.CK_BYTE(b)
-	}
-
-	cSig := make([]C.CK_BYTE, r.pub.Size())
-	cSigLen := C.CK_ULONG(len(cSig))
-
-	m := C.CK_MECHANISM{C.CKM_RSA_PKCS, nil, 0}
-	rv := C.ck_sign_init(r.o.fl, r.o.h, &m, r.o.o)
-	if err := isOk("C_SignInit", rv); err != nil {
-		return nil, err
-	}
-	rv = C.ck_sign(r.o.fl, r.o.h, &cBytes[0], C.CK_ULONG(len(cBytes)), &cSig[0], &cSigLen)
-	if err := isOk("C_Sign", rv); err != nil {
-		return nil, err
-	}
-
-	if int(cSigLen) != len(cSig) {
-		return nil, fmt.Errorf("expected signature of length %d, got %d", len(cSig), cSigLen)
-	}
-	sig := make([]byte, len(cSig))
-	for i, b := range cSig {
-		sig[i] = byte(b)
-	}
-	return sig, nil
 }
