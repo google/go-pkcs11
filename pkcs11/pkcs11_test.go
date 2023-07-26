@@ -595,7 +595,7 @@ func TestCreateCertificate(t *testing.T) {
 	}
 }
 
-func TestEncryptOAEP(t *testing.T) {
+func TestEncryptRSA(t *testing.T) {
 	msg := "Plain text to encrypt"
 	b := []byte(msg)
 	tests := []struct {
@@ -617,7 +617,7 @@ func TestEncryptOAEP(t *testing.T) {
 			if !ok {
 				t.Fatalf("Private Key unexpected type, got %T, want *rsaPrivateKey", priv)
 			}
-			cipher, err := rsaPriv.encryptOAEP(b)
+			cipher, err := rsaPriv.encryptRSA(b)
 			if err != nil {
 				t.Errorf("encryptOAEP Error: %v", err)
 				t.Log(cipher)

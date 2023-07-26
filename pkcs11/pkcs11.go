@@ -1613,6 +1613,11 @@ func (s *Slot) generateRSA(o keyOptions) (crypto.PrivateKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing private key: %w", err)
 	}
+	// rsaPriv, ok := priv.(*rsaPrivateKey)
+	// if !ok {
+	// 	return nil, fmt.Errorf("expected rsa private key, got: %T", pub)
+	// }
+	// rsaPriv.pubH = pubH
 	return priv, nil
 }
 
@@ -1744,7 +1749,7 @@ func (r *rsaPrivateKey) getHash() *crypto.Hash {
 	return &hash
 }
 
-func (r *rsaPrivateKey) encryptOAEP(data []byte) ([]byte, error) {
+func (r *rsaPrivateKey) encryptRSA(data []byte) ([]byte, error) {
 	hash := r.getHash()
 	cParam := (C.CK_RSA_PKCS_OAEP_PARAMS_PTR)(C.malloc(C.sizeof_CK_RSA_PKCS_OAEP_PARAMS))
 	defer C.free(unsafe.Pointer(cParam))
@@ -1783,6 +1788,7 @@ func (r *rsaPrivateKey) encryptOAEP(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	// RSA is only able to encrypt data to a maximum amount equal to your key size 
 	cCipher := make([]C.CK_BYTE, r.pub.Size())
 	cCipherLen := C.CK_ULONG(len(cCipher))
 
