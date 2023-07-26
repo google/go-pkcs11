@@ -1770,7 +1770,7 @@ func (r *rsaPrivateKey) encryptRSA(data []byte) ([]byte, error) {
 		cParam.hashAlg = C.CKM_SHA512
 		cParam.mgf = C.CKG_MGF1_SHA512
 	case crypto.SHA1:
-		cParam.hashAlg = C.CKM_SHA1
+		cParam.hashAlg = C.CKM_SHA_1
 		cParam.mgf = C.CKG_MGF1_SHA1
 	default:
 		return nil, fmt.Errorf("unsupported hash algorithm: %s", hash)
