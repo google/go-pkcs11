@@ -1749,7 +1749,7 @@ func (r *rsaPrivateKey) getHash() *crypto.Hash {
 	return &hash
 }
 
-func (r *rsaPrivateKey) WithPublicKeyHandle(o Object) *rsaPrivateKey{
+func (r *rsaPrivateKey) WithPublicKeyHandle(o Object) *rsaPrivateKey {
 	r.pubH = &o
 	return r
 }
