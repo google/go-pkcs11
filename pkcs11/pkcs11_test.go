@@ -39,7 +39,7 @@ var requireSoftHSMv2 = flag.Bool("require-libsofthsm2", false,
 	"When set, tests will fail if libsofthsm2 is not available.")
 
 const (
-	libSoftHSMPath = "/usr/lib/softhsm/libsofthsm2.so"
+	libSoftHSMPath = "/usr/local/lib/softhsm/libsofthsm2.so"
 	syslogPath     = "/var/log/syslog"
 
 	testAdminPIN = "12345"

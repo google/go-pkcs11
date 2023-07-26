@@ -1782,8 +1782,8 @@ func (r *rsaPrivateKey) encryptRSA(data []byte) ([]byte, error) {
 	}
 
 	cParam.source = C.CKZ_DATA_SPECIFIED
-	cParam.pSourceData = C.CK_VOID_PTR(&cDataBytes)
-	cParam.ulSourceDataLen = C.CK_ULONG(len(cDataBytes))
+	cParam.pSourceData = nil
+	cParam.ulSourceDataLen = 0
 
 	m := C.CK_MECHANISM{
 		mechanism:      C.CKM_RSA_PKCS_OAEP,
