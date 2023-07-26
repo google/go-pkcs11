@@ -1233,7 +1233,7 @@ func (o Object) PrivateKey(pub crypto.PublicKey) (crypto.PrivateKey, error) {
 		if !ok {
 			return nil, fmt.Errorf("expected rsa public key, got: %T", pub)
 		}
-		return &rsaPrivateKey{o, p, nil}, nil
+		return &rsaPrivateKey{o, p, nil, nil}, nil
 	default:
 		return nil, fmt.Errorf("unsupported key type: 0x%x", *kt)
 	}
@@ -1250,9 +1250,10 @@ var hashPrefixes = map[crypto.Hash][]byte{
 }
 
 type rsaPrivateKey struct {
-	o   Object
-	pub *rsa.PublicKey
+	o    Object
+	pub  *rsa.PublicKey
 	hash *crypto.Hash
+	pubH *Object
 }
 
 func (r *rsaPrivateKey) Public() crypto.PublicKey {
@@ -1613,11 +1614,11 @@ func (s *Slot) generateRSA(o keyOptions) (crypto.PrivateKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing private key: %w", err)
 	}
-	// rsaPriv, ok := priv.(*rsaPrivateKey)
-	// if !ok {
-	// 	return nil, fmt.Errorf("expected rsa private key, got: %T", pub)
-	// }
-	// rsaPriv.pubH = pubH
+	rsaPriv, ok := priv.(*rsaPrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("expected rsa private key, got: %T", pub)
+	}
+	rsaPriv.WithPublicKeyHandle(pubObj)
 	return priv, nil
 }
 
@@ -1734,7 +1735,6 @@ func (s *Slot) generateECDSA(o keyOptions) (crypto.PrivateKey, error) {
 	return priv, nil
 }
 
-
 func (r *rsaPrivateKey) WithHash(hash crypto.Hash) (*rsaPrivateKey, error) {
 	r.hash = &hash
 	return r, nil
@@ -1743,10 +1743,15 @@ func (r *rsaPrivateKey) WithHash(hash crypto.Hash) (*rsaPrivateKey, error) {
 func (r *rsaPrivateKey) getHash() *crypto.Hash {
 	if r.hash != nil {
 		return r.hash
-	} 
+	}
 	// Initialized to SHA256 if no hash specified
 	hash := crypto.SHA256
 	return &hash
+}
+
+func (r *rsaPrivateKey) WithPublicKeyHandle(o Object) *rsaPrivateKey{
+	r.pubH = &o
+	return r
 }
 
 func (r *rsaPrivateKey) encryptRSA(data []byte) ([]byte, error) {
@@ -1755,17 +1760,17 @@ func (r *rsaPrivateKey) encryptRSA(data []byte) ([]byte, error) {
 	defer C.free(unsafe.Pointer(cParam))
 
 	switch *hash {
-		case crypto.SHA256:
-			cParam.hashAlg = C.CKM_SHA256
-			cParam.mgf = C.CKG_MGF1_SHA256
-		case crypto.SHA384:
-			cParam.hashAlg = C.CKM_SHA384
-			cParam.mgf = C.CKG_MGF1_SHA384
-		case crypto.SHA512:
-			cParam.hashAlg = C.CKM_SHA512
-			cParam.mgf = C.CKG_MGF1_SHA512
-		default:
-			return nil, fmt.Errorf("unsupported hash algorithm: %s", hash)
+	case crypto.SHA256:
+		cParam.hashAlg = C.CKM_SHA256
+		cParam.mgf = C.CKG_MGF1_SHA256
+	case crypto.SHA384:
+		cParam.hashAlg = C.CKM_SHA384
+		cParam.mgf = C.CKG_MGF1_SHA384
+	case crypto.SHA512:
+		cParam.hashAlg = C.CKM_SHA512
+		cParam.mgf = C.CKG_MGF1_SHA512
+	default:
+		return nil, fmt.Errorf("unsupported hash algorithm: %s", hash)
 	}
 
 	cDataBytes := make([]C.CK_BYTE, len(data))
@@ -1783,12 +1788,12 @@ func (r *rsaPrivateKey) encryptRSA(data []byte) ([]byte, error) {
 		ulParameterLen: C.CK_ULONG(C.sizeof_CK_RSA_PKCS_OAEP_PARAMS),
 	}
 
-	rv := C.ck_encrypt_init(r.o.fl, r.o.h, &m, r.o.o)
+	rv := C.ck_encrypt_init(r.o.fl, r.o.h, &m, r.pubH.o)
 	if err := isOk("C_EncryptInit", rv); err != nil {
 		return nil, err
 	}
 
-	// RSA is only able to encrypt data to a maximum amount equal to your key size 
+	// RSA is only able to encrypt data to a maximum amount equal to your key size
 	cCipher := make([]C.CK_BYTE, r.pub.Size())
 	cCipherLen := C.CK_ULONG(len(cCipher))
 
@@ -1805,7 +1810,7 @@ func (r *rsaPrivateKey) encryptRSA(data []byte) ([]byte, error) {
 	return cipher, nil
 }
 
-func (r *rsaPrivateKey) Decrypt(encryptedData []byte) ([]byte, error)  {
+func (r *rsaPrivateKey) Decrypt(encryptedData []byte) ([]byte, error) {
 	return nil, nil
 }
 

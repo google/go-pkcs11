@@ -619,7 +619,7 @@ func TestEncryptRSA(t *testing.T) {
 			}
 			cipher, err := rsaPriv.encryptRSA(b)
 			if err != nil {
-				t.Errorf("encryptOAEP Error: %v", err)
+				t.Errorf("encryptRSA Error: %v", err)
 				t.Log(cipher)
 			}
 		})
