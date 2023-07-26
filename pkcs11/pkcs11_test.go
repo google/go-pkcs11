@@ -35,7 +35,7 @@ import (
 	"testing"
 )
 
-var requireSoftHSMv2 = flag.Bool("require-libsofthsm2", false,
+var requireSoftHSMv2 = flag.Bool("require-libsofthsm2", true,
 	"When set, tests will fail if libsofthsm2 is not available.")
 
 const (
