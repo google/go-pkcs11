@@ -617,6 +617,7 @@ func TestEncryptRSA(t *testing.T) {
 			if !ok {
 				t.Fatalf("Private Key unexpected type, got %T, want *rsaPrivateKey", priv)
 			}
+			rsaPriv.WithHash(crypto.SHA1)
 			cipher, err := rsaPriv.encryptRSA(b)
 			if err != nil {
 				t.Errorf("encryptRSA Error: %v", err)
