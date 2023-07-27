@@ -1813,11 +1813,65 @@ func (r *rsaPrivateKey) encryptRSA(data []byte) ([]byte, error) {
 	return cipher, nil
 }
 
-func (r *rsaPrivateKey) Decrypt(encryptedData []byte) ([]byte, error) {
-	return nil, nil
+func (r *rsaPrivateKey) decryptRSA(encryptedData []byte) ([]byte, error) {
+	hash := r.getHash()
+	cParam := (C.CK_RSA_PKCS_OAEP_PARAMS_PTR)(C.malloc(C.sizeof_CK_RSA_PKCS_OAEP_PARAMS))
+	defer C.free(unsafe.Pointer(cParam))
+
+	switch *hash {
+	case crypto.SHA256:
+		cParam.hashAlg = C.CKM_SHA256
+		cParam.mgf = C.CKG_MGF1_SHA256
+	case crypto.SHA384:
+		cParam.hashAlg = C.CKM_SHA384
+		cParam.mgf = C.CKG_MGF1_SHA384
+	case crypto.SHA512:
+		cParam.hashAlg = C.CKM_SHA512
+		cParam.mgf = C.CKG_MGF1_SHA512
+	case crypto.SHA1:
+		cParam.hashAlg = C.CKM_SHA_1
+		cParam.mgf = C.CKG_MGF1_SHA1
+	default:
+		return nil, fmt.Errorf("unsupported hash algorithm: %s", hash)
+	}
+
+	cEncDataBytes := make([]C.CK_BYTE, len(encryptedData))
+	for i, b := range cEncDataBytes {
+		cEncDataBytes[i] = C.CK_BYTE(b)
+	}
+
+	cParam.source = C.CKZ_DATA_SPECIFIED
+	cParam.pSourceData = nil
+	cParam.ulSourceDataLen = 0
+
+	m := C.CK_MECHANISM{
+		mechanism:      C.CKM_RSA_PKCS_OAEP,
+		pParameter:     C.CK_VOID_PTR(cParam),
+		ulParameterLen: C.CK_ULONG(C.sizeof_CK_RSA_PKCS_OAEP_PARAMS),
+	}
+
+	rv := C.ck_decrypt_init(r.o.fl, r.o.h, &m, r.o.o)
+	if err := isOk("C_DecryptInit", rv); err != nil {
+		return nil, err
+	}
+
+	cDecrypted := make([]C.CK_BYTE, r.pub.Size())
+	cDecryptedLen := C.CK_ULONG(len(cDecrypted))
+
+	rv = C.ck_decrypt(r.o.fl, r.o.h, &cEncDataBytes[0], C.CK_ULONG(len(cEncDataBytes)), &cDecrypted[0], &cDecryptedLen)
+	if err := isOk("C_Decrypt", rv); err != nil {
+		return nil, err
+	}
+
+	decrypted := make([]byte, len(cDecrypted))
+	for i, b := range cDecrypted {
+		decrypted[i] = byte(b)
+	}
+
+	return decrypted, nil
 }
 
-// func (k crypto.PrivateKey) Encrypt(data []byte) ([]byte, error) {
+// func Encrypt(k crypto.PrivateKey, data []byte) ([]byte, error) {
 // 	kt := (*C.CK_KEY_TYPE)(C.malloc(C.sizeof_CK_KEY_TYPE))
 // 	defer C.free(unsafe.Pointer(kt))
 // 	switch *kt {
@@ -1825,7 +1879,8 @@ func (r *rsaPrivateKey) Decrypt(encryptedData []byte) ([]byte, error) {
 // 		//TODO: call encrypt ec
 // 		return nil, nil
 // 	case C.CKK_RSA:
-// 		return *k.encryptOAEP(data)
+// 		rsaPriv := k.(*rsaPrivateKey)
+// 		return rsaPriv.encryptRSA(data)
 // 	default:
 // 		return nil, fmt.Errorf("unsupported key type: 0x%x", *kt)
 // 	}

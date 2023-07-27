@@ -617,11 +617,50 @@ func TestEncryptRSA(t *testing.T) {
 			if !ok {
 				t.Fatalf("Private Key unexpected type, got %T, want *rsaPrivateKey", priv)
 			}
+			// SHA1 is the only hash function supported by softhsm
 			rsaPriv.WithHash(crypto.SHA1)
 			cipher, err := rsaPriv.encryptRSA(b)
 			if err != nil {
 				t.Errorf("encryptRSA Error: %v", err)
 				t.Log(cipher)
+			}
+		})
+	}
+}
+
+func TestDecryptRSA(t *testing.T) {
+	msg := "Plain text to encrypt"
+	b := []byte(msg)
+	tests := []struct {
+		name string
+		bits int
+	}{
+		{"2048", 2048},
+		{"4096", 4096},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := newTestSlot(t)
+			o := keyOptions{RSABits: test.bits}
+			priv, err := s.generate(o)
+			if err != nil {
+				t.Fatalf("generate(%#v) failed: %v", o, err)
+			}
+			rsaPriv, ok := priv.(*rsaPrivateKey)
+			if !ok {
+				t.Fatalf("Private Key unexpected type, got %T, want *rsaPrivateKey", priv)
+			}
+			rsaPriv.WithHash(crypto.SHA1)
+			cipher, err := rsaPriv.encryptRSA(b)
+			if err != nil {
+				t.Errorf("encryptRSA Error: %v", err)
+			}
+			decrypted, err := rsaPriv.decryptRSA(cipher)
+			if err != nil {
+				t.Errorf("decryptRSA Error: %v", err)
+			}
+			if !bytes.Equal(decrypted, b) {
+				t.Errorf("decryptRSA Error: expected %v, got %v", msg, string(decrypted))
 			}
 		})
 	}
