@@ -1836,7 +1836,7 @@ func (r *rsaPrivateKey) decryptRSA(encryptedData []byte) ([]byte, error) {
 	}
 
 	cEncDataBytes := make([]C.CK_BYTE, len(encryptedData))
-	for i, b := range cEncDataBytes {
+	for i, b := range encryptedData {
 		cEncDataBytes[i] = C.CK_BYTE(b)
 	}
 
@@ -1855,8 +1855,14 @@ func (r *rsaPrivateKey) decryptRSA(encryptedData []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	cDecrypted := make([]C.CK_BYTE, r.pub.Size())
-	cDecryptedLen := C.CK_ULONG(len(cDecrypted))
+	var cDecryptedLen C.CK_ULONG
+
+	rv = C.ck_decrypt(r.o.fl, r.o.h, &cEncDataBytes[0], C.CK_ULONG(len(cEncDataBytes)), nil, &cDecryptedLen)
+	if err := isOk("C_Decrypt", rv); err != nil {
+		return nil, err
+	}
+
+	cDecrypted := make([]C.CK_BYTE, cDecryptedLen)
 
 	rv = C.ck_decrypt(r.o.fl, r.o.h, &cEncDataBytes[0], C.CK_ULONG(len(cEncDataBytes)), &cDecrypted[0], &cDecryptedLen)
 	if err := isOk("C_Decrypt", rv); err != nil {
