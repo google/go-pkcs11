@@ -232,6 +232,26 @@ CK_RV ck_sign(
 ) {
 	return (*fl->C_Sign)(hSession, pData, ulDataLen, pSignature, pulSignatureLen);
 }
+
+CK_RV ck_decrypt_init(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_MECHANISM_PTR  pMechanism,
+	CK_OBJECT_HANDLE  hKey
+) {
+	return (*fl->C_DecryptInit)(hSession, pMechanism, hKey);
+}
+
+CK_RV ck_decrypt(
+	CK_FUNCTION_LIST_PTR fl,
+	CK_SESSION_HANDLE hSession,
+	CK_BYTE_PTR       pEncryptedData,
+	CK_ULONG          ulEncryptedDataLen,
+	CK_BYTE_PTR       pData,
+	CK_ULONG_PTR      pulDataLen
+) {
+	return (*fl->C_Decrypt)(hSession, pEncryptedData,  ulEncryptedDataLen, pData, pulDataLen);
+}
 */
 // #cgo linux LDFLAGS: -ldl
 import "C"
@@ -1226,20 +1246,15 @@ func (r *rsaPrivateKey) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts)
 	// http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/cs01/pkcs11-curr-v2.40-cs01.html#_Toc399398842
 	size := opts.HashFunc().Size()
 	if size != len(digest) {
-		return nil, fmt.Errorf("input mush be hashed")
+		return nil, fmt.Errorf("input must be hashed")
 	}
 	prefix, ok := hashPrefixes[opts.HashFunc()]
 	if !ok {
 		return nil, fmt.Errorf("unsupported hash function: %s", opts.HashFunc())
 	}
 
-	cBytes := make([]C.CK_BYTE, len(prefix)+len(digest))
-	for i, b := range prefix {
-		cBytes[i] = C.CK_BYTE(b)
-	}
-	for i, b := range digest {
-		cBytes[len(prefix)+i] = C.CK_BYTE(b)
-	}
+	preAndDigest := append(prefix, digest...)
+	cBytes := toCBytes(preAndDigest)
 
 	cSig := make([]C.CK_BYTE, r.pub.Size())
 	cSigLen := C.CK_ULONG(len(cSig))
@@ -1257,10 +1272,7 @@ func (r *rsaPrivateKey) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts)
 	if int(cSigLen) != len(cSig) {
 		return nil, fmt.Errorf("expected signature of length %d, got %d", len(cSig), cSigLen)
 	}
-	sig := make([]byte, len(cSig))
-	for i, b := range cSig {
-		sig[i] = byte(b)
-	}
+	sig := toBytes(cSig)
 	return sig, nil
 }
 
@@ -1295,10 +1307,7 @@ func (r *rsaPrivateKey) signPSS(digest []byte, opts *rsa.PSSOptions) ([]byte, er
 		cParam.sLen = C.CK_ULONG(opts.SaltLength)
 	}
 
-	cBytes := make([]C.CK_BYTE, len(digest))
-	for i, b := range digest {
-		cBytes[i] = C.CK_BYTE(b)
-	}
+	cBytes := toCBytes(digest)
 
 	cSig := make([]C.CK_BYTE, r.pub.Size())
 	cSigLen := C.CK_ULONG(len(cSig))
@@ -1321,10 +1330,7 @@ func (r *rsaPrivateKey) signPSS(digest []byte, opts *rsa.PSSOptions) ([]byte, er
 	if int(cSigLen) != len(cSig) {
 		return nil, fmt.Errorf("expected signature of length %d, got %d", len(cSig), cSigLen)
 	}
-	sig := make([]byte, len(cSig))
-	for i, b := range cSig {
-		sig[i] = byte(b)
-	}
+	sig := toBytes(cSig)
 	return sig, nil
 }
 
@@ -1353,10 +1359,7 @@ func (e *ecdsaPrivateKey) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpt
 	cSig := make([]C.CK_BYTE, byteLen*2)
 	cSigLen := C.CK_ULONG(len(cSig))
 
-	cBytes := make([]C.CK_BYTE, len(digest))
-	for i, b := range digest {
-		cBytes[i] = C.CK_BYTE(b)
-	}
+	cBytes := toCBytes(digest)
 
 	rv = C.ck_sign(e.o.fl, e.o.h, &cBytes[0], C.CK_ULONG(len(digest)), &cSig[0], &cSigLen)
 	if err := isOk("C_Sign", rv); err != nil {
@@ -1366,10 +1369,7 @@ func (e *ecdsaPrivateKey) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpt
 	if int(cSigLen) != len(cSig) {
 		return nil, fmt.Errorf("expected signature of length %d, got %d", len(cSig), cSigLen)
 	}
-	sig := make([]byte, len(cSig))
-	for i, b := range cSig {
-		sig[i] = byte(b)
-	}
+	sig := toBytes(cSig)
 
 	var (
 		r = big.NewInt(0)
@@ -1686,4 +1686,87 @@ func (s *Slot) generateECDSA(o keyOptions) (crypto.PrivateKey, error) {
 		return nil, fmt.Errorf("parsing private key: %w", err)
 	}
 	return priv, nil
+}
+
+func (r *rsaPrivateKey) Decrypt(_ io.Reader, encryptedData []byte, opts crypto.DecrypterOpts) ([]byte, error) {
+	var m C.CK_MECHANISM
+
+	if o, ok := opts.(*rsa.OAEPOptions); ok {
+		cParam := (C.CK_RSA_PKCS_OAEP_PARAMS_PTR)(C.malloc(C.sizeof_CK_RSA_PKCS_OAEP_PARAMS))
+		defer C.free(unsafe.Pointer(cParam))
+
+		switch o.Hash {
+		case crypto.SHA256:
+			cParam.hashAlg = C.CKM_SHA256
+			cParam.mgf = C.CKG_MGF1_SHA256
+		case crypto.SHA384:
+			cParam.hashAlg = C.CKM_SHA384
+			cParam.mgf = C.CKG_MGF1_SHA384
+		case crypto.SHA512:
+			cParam.hashAlg = C.CKM_SHA512
+			cParam.mgf = C.CKG_MGF1_SHA512
+		case crypto.SHA1:
+			cParam.hashAlg = C.CKM_SHA_1
+			cParam.mgf = C.CKG_MGF1_SHA1
+		default:
+			return nil, fmt.Errorf("decryptOAEP error, unsupported hash algorithm: %s", o.Hash)
+		}
+
+		cParam.source = C.CKZ_DATA_SPECIFIED
+		cParam.pSourceData = nil
+		cParam.ulSourceDataLen = 0
+
+		m = C.CK_MECHANISM{
+			mechanism:      C.CKM_RSA_PKCS_OAEP,
+			pParameter:     C.CK_VOID_PTR(cParam),
+			ulParameterLen: C.CK_ULONG(C.sizeof_CK_RSA_PKCS_OAEP_PARAMS),
+		}
+	} else {
+		m = C.CK_MECHANISM{C.CKM_RSA_PKCS, nil, 0}
+	}
+
+	cEncDataBytes := toCBytes(encryptedData)
+
+	rv := C.ck_decrypt_init(r.o.fl, r.o.h, &m, r.o.o)
+	if err := isOk("C_DecryptInit", rv); err != nil {
+		return nil, err
+	}
+
+	var cDecryptedLen C.CK_ULONG
+
+	// First call is used to determine length necessary to hold decrypted data (PKCS #11 5.2)
+	rv = C.ck_decrypt(r.o.fl, r.o.h, &cEncDataBytes[0], C.CK_ULONG(len(cEncDataBytes)), nil, &cDecryptedLen)
+	if err := isOk("C_Decrypt", rv); err != nil {
+		return nil, err
+	}
+
+	cDecrypted := make([]C.CK_BYTE, cDecryptedLen)
+
+	rv = C.ck_decrypt(r.o.fl, r.o.h, &cEncDataBytes[0], C.CK_ULONG(len(cEncDataBytes)), &cDecrypted[0], &cDecryptedLen)
+	if err := isOk("C_Decrypt", rv); err != nil {
+		return nil, err
+	}
+
+	decrypted := toBytes(cDecrypted)
+
+	// Removes null padding (PKCS#11 5.2): http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/os/pkcs11-base-v2.40-os.html#_Toc416959738
+	decrypted = bytes.Trim(decrypted, "\x00")
+
+	return decrypted, nil
+}
+
+func toBytes(data []C.CK_BYTE) []byte {
+	goBytes := make([]byte, len(data))
+	for i, b := range data {
+		goBytes[i] = byte(b)
+	}
+	return goBytes
+}
+
+func toCBytes(data []byte) []C.CK_BYTE {
+	cBytes := make([]C.CK_BYTE, len(data))
+	for i, b := range data {
+		cBytes[i] = C.CK_BYTE(b)
+	}
+	return cBytes
 }
